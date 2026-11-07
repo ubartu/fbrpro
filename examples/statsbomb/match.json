@@ -1,0 +1,19 @@
+{
+  "match_id": "demo-1",
+  "match_date": "2024-01-01",
+  "competition": {
+    "competition_id": 1,
+    "competition_name": "Synthetic League",
+    "country_name": "Demo"
+  },
+  "season": {
+    "season_id": 1,
+    "season_name": "2023/2024"
+  },
+  "home_team": {
+    "home_team_id": 1
+  },
+  "away_team": {
+    "away_team_id": 2
+  }
+}

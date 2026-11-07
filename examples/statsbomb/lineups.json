@@ -1,0 +1,41 @@
+[
+  {
+    "team_id": 1,
+    "team_name": "Demo Home",
+    "lineup": [
+      {
+        "player_id": 10,
+        "player_name": "Demo Passer",
+        "jersey_number": 6,
+        "positions": [
+          {
+            "position": "Center Midfield",
+            "position_id": 13,
+            "from": "00:00",
+            "to": "90:00",
+            "from_period": 1,
+            "to_period": 2,
+            "start_reason": "Starting XI",
+            "end_reason": "Final Whistle"
+          }
+        ]
+      },
+      {
+        "player_id": 11,
+        "player_name": "Demo Receiver",
+        "positions": []
+      }
+    ]
+  },
+  {
+    "team_id": 2,
+    "team_name": "Demo Away",
+    "lineup": [
+      {
+        "player_id": 20,
+        "player_name": "Demo Defender",
+        "positions": []
+      }
+    ]
+  }
+]

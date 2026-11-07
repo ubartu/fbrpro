@@ -1,0 +1,79 @@
+[
+  {
+    "id": "e1",
+    "index": 1,
+    "period": 1,
+    "timestamp": "00:12:34.200",
+    "type": {
+      "name": "Pass"
+    },
+    "team": {
+      "id": 1
+    },
+    "player": {
+      "id": 10
+    },
+    "location": [
+      60,
+      40
+    ],
+    "pass": {
+      "end_location": [
+        90,
+        20
+      ],
+      "recipient": {
+        "id": 11
+      }
+    }
+  },
+  {
+    "id": "e2",
+    "index": 2,
+    "period": 1,
+    "timestamp": "00:13:00.000",
+    "type": {
+      "name": "Pass"
+    },
+    "team": {
+      "id": 1
+    },
+    "player": {
+      "id": 11
+    },
+    "location": [
+      90,
+      20
+    ],
+    "under_pressure": false,
+    "pass": {
+      "end_location": [
+        95,
+        25
+      ],
+      "outcome": {
+        "name": "Incomplete"
+      }
+    }
+  },
+  {
+    "id": "e3",
+    "index": 3,
+    "period": 2,
+    "timestamp": "00:00:03.000",
+    "minute": 45,
+    "type": {
+      "name": "Pressure"
+    },
+    "team": {
+      "id": 2
+    },
+    "player": {
+      "id": 20
+    },
+    "location": [
+      30,
+      40
+    ]
+  }
+]

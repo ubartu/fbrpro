@@ -1,0 +1,60 @@
+{
+  "provider": "demo_tracking",
+  "inputs": [
+    {
+      "dataset": "teams",
+      "path": "teams.json",
+      "fields": {
+        "team_id": "id",
+        "name": "name"
+      }
+    },
+    {
+      "dataset": "players",
+      "path": "players.json",
+      "fields": {
+        "player_id": "id",
+        "name": "name"
+      }
+    },
+    {
+      "dataset": "matches",
+      "path": "matches.json",
+      "fields": {
+        "match_id": "id",
+        "home_team_id": "home",
+        "away_team_id": "away",
+        "pitch_length_m": "length",
+        "pitch_width_m": "width"
+      }
+    },
+    {
+      "dataset": "tracking",
+      "path": "tracking.csv",
+      "constants": {
+        "match_id": "m1",
+        "object_type": "player",
+        "team_id": "h"
+      },
+      "fields": {
+        "frame_id": "frame",
+        "period": "period",
+        "period_time_ms": "seconds",
+        "object_id": "player",
+        "x_m": "x",
+        "y_m": "y",
+        "observed": "detected"
+      },
+      "clock": {
+        "basis": "period",
+        "unit": "s"
+      },
+      "coordinates": {
+        "system": "centered_metres",
+        "length_m": 105,
+        "width_m": 68,
+        "frame": "stadium_fixed"
+      }
+    }
+  ]
+}

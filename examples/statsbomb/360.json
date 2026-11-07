@@ -1,0 +1,35 @@
+[
+  {
+    "event_uuid": "e1",
+    "visible_area": [
+      0,
+      0,
+      120,
+      0,
+      120,
+      80,
+      0,
+      80
+    ],
+    "freeze_frame": [
+      {
+        "location": [
+          60,
+          40
+        ],
+        "teammate": true,
+        "actor": true,
+        "keeper": false
+      },
+      {
+        "location": [
+          75,
+          30
+        ],
+        "teammate": false,
+        "actor": false,
+        "keeper": false
+      }
+    ]
+  }
+]

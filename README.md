@@ -169,3 +169,21 @@ Tests cover conversions, period clocks, missing values, identity mappings, dupli
 This is a local intake library and command-line tool, not the final scouting interface or a hosted ingestion service. It imports one StatsBomb match per run and supports multi-match mapped input. It does not write to PostgreSQL, download feeds automatically, calculate playing-style labels, or synchronize separate providers' clocks. Batch scheduling, database upserts and provider-specific adapters can be added around this contract.
 
 Public availability does not by itself establish commercial redistribution rights. Keep provider licences and attribution alongside the dataset when selecting production sources. No supplier credentials or paid data are included.
+
+## Midfield assessment dashboard
+
+Open `dashboard/index.html` directly in a browser. Use **Open JSON report** to
+load output from `python3 -m football_normalizer.midfield`. See
+[MIDFIELD_ARCHITECTURE.md](MIDFIELD_ARCHITECTURE.md) for generation, comparison
+rules, and the validation plan.
+
+Generated reports and the dashboard with embedded match data are local artifacts.
+To recreate the two-dataset dashboard from your reports, run from the project root:
+
+```sh
+python3 dashboard/build.py reports/bundesliga-relative-role-report.json \
+  reports/premier-league-relative-role-report.json
+```
+
+Open `dashboard/local.html` for the built-in dataset selector. The tracked
+`dashboard/index.html` works directly with **Open JSON report**.

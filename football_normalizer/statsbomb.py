@@ -8,6 +8,28 @@ def slug(name):
     return str(name).lower().replace(" ", "_").replace("-", "_")
 
 
+def receipt_clock_anomalies(events):
+    """Identify derived receptions whose provider clocks wrap or overrun the half."""
+    ends = {}
+    for event in events:
+        if event["type"]["name"] == "Half End":
+            period = event["period"]
+            stamp = time_ms(event["timestamp"], "timestamp")
+            ends[period] = max(ends.get(period, 0), stamp)
+    previous = None
+    for event in events:
+        period = event["period"]
+        stamp = time_ms(event["timestamp"], "timestamp")
+        if (event["type"]["name"] == "Ball Receipt*" and previous
+                and previous["period"] == period and previous["type"]["name"] == "Pass"
+                and previous["id"] in event.get("related_events", ()) and period in ends):
+            previous_stamp = time_ms(previous["timestamp"], "timestamp")
+            if ((stamp <= 2000 and 0 <= ends[period] - previous_stamp <= 15000)
+                    or (stamp > ends[period] and previous_stamp <= ends[period])):
+                yield event["id"]
+        previous = event
+
+
 def normalize(args, bundle):
     identity = bundle.identity
     mid = identity.resolve("match", args.match_id)
@@ -82,7 +104,13 @@ def normalize(args, bundle):
                                         "starter": any(x.get("start_reason") == "Starting XI" for x in positions) if "positions" in p else None,
                                         "minutes_played": None, "participated": bool(positions) if "positions" in p else None}, p["player_id"], lineups_source)
     event_source = bundle.archive(args.events)
-    for i, event in enumerate(read_records(args.events), 1):
+    events = list(read_records(args.events))
+    omitted = set(receipt_clock_anomalies(events))
+    if omitted:
+        bundle.warnings.append("Excluded invalid half-end reception clocks (raw events retained): " + ", ".join(sorted(omitted)))
+    for i, event in enumerate(events, 1):
+        if event["id"] in omitted:
+            continue
         kind = event["type"]["name"]
         payload = event.get(slug(kind), {})
         x, y = point(*(event.get("location") or [None, None])[:2], coord, length, width)
@@ -109,11 +137,13 @@ def normalize(args, bundle):
                "provider_index": event.get("index"), "provider_position": get_path(event, "position.name"),
                "possession_id": event.get("possession"), "possession_team_id": identity.resolve("team", get_path(event, "possession_team.id")),
                "play_pattern": get_path(event, "play_pattern.name"),
-               "provider_attributes": payload, "related_event_ids": [identity.resolve("event", e, args.match_id) for e in event.get("related_events", [])]}
+               "provider_attributes": payload, "related_event_ids": [identity.resolve("event", e, args.match_id) for e in event.get("related_events", []) if e not in omitted]}
         bundle.emit("events", row, event["id"], event_source, i)
     if args.snapshots:
         snapshot_source = bundle.archive(args.snapshots)
         for i, snapshot in enumerate(read_records(args.snapshots), 1):
+            if snapshot["event_uuid"] in omitted:
+                continue
             players = []
             for p in snapshot.get("freeze_frame", []):
                 x, y = point(*p["location"][:2], coord, length, width)

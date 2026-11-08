@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Midfield Lab · FBRPRO</title>
+<style>
+:root{color-scheme:light;--ink:#162625;--muted:#546663;--line:#dce6df;--paper:#f3f6f0;--green:#176454;--warm:#a2482b;--navy:#102f2a;font-family:system-ui,-apple-system,sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);line-height:1.5}button,select,input{font:inherit}button,select,summary{cursor:pointer}a{color:var(--green)}button:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid #218e78;outline-offset:3px}.wrap{width:min(1160px,calc(100% - 40px));margin:auto}.hero{background:var(--navy);color:white;padding:20px 0 38px;border-bottom:4px solid #71b79c}.mast,.actions,.heading,.row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.mast,.heading{justify-content:space-between}.brand,.eyebrow{text-transform:uppercase;letter-spacing:.16em;font-size:.75rem;font-weight:750}.brand{color:#c2e6d7}.hero h1{font-size:clamp(2.45rem,6vw,4.2rem);letter-spacing:-.065em;margin:24px 0 0;line-height:1.05}.hero p{color:#d4e7e0;margin:10px 0 0}.btn{border:1px solid #bcd5c9;border-radius:7px;background:white;color:var(--navy);padding:8px 14px;font-weight:650}.btn.secondary{background:transparent;color:white}.meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}.badge,.pill{border-radius:20px;padding:4px 10px;font-size:.78rem;font-weight:650}.badge{background:#264941;color:#e5f4ed}.pill{background:#edf0e9;color:#41534d;display:inline-block}.pill.candidate{background:#dbf2e7;color:#155541}main{padding:22px 0 54px}.panel,.player{background:white;border:1px solid var(--line);border-radius:12px}.panel{padding:20px;margin-bottom:16px}.filters{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}label{display:grid;gap:6px;font-size:.83rem;font-weight:700}select{width:100%;min-width:0;border:1px solid #bdcec4;border-radius:7px;background:#fff;color:var(--ink);padding:8px}h2{font-size:1.25rem;letter-spacing:-.025em;margin:0 0 8px}.sub,.hint,small{color:var(--muted)}.hint{font-size:.83rem;margin:10px 0 0}.notice{font-size:.86rem;padding:10px 12px;background:#fff5e5;border:1px solid #e9d7b9;border-radius:7px;margin:12px 0 0}.cards{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}.player{padding:16px 18px;border-top:4px solid var(--green)}.player.b{border-top-color:var(--warm)}.player h2{margin:4px 0}.legend{display:flex;gap:14px;font-size:.8rem;color:var(--muted)}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--green);margin-right:4px}.dot.b{background:var(--warm)}.table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:.89rem}.table th{text-align:left}.table th,.table td{padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}.table tr:last-child td{border:0}.table th:first-child{width:34%}.val{font-variant-numeric:tabular-nums;font-weight:750}.bar{height:5px;border-radius:5px;background:#e8eeea;margin:6px 0 3px;overflow:hidden}.fill{height:100%;background:var(--green)}.fill.b{background:var(--warm)}.table small{display:block;font-size:.76rem}.table details{margin-top:6px;font-size:.78rem}.table summary{color:var(--green)}.evidence{padding-left:18px;font-family:monospace;max-height:150px;overflow:auto}.empty{padding:24px;text-align:center}.status{margin:0 0 12px;color:var(--muted)}.status.error{color:#8b291d}.match-control{min-width:0}.score-track{height:5px;background:#e8eeea;border-radius:4px;margin:6px 0;overflow:hidden}.score-track i{display:block;height:100%;background:var(--green)}.dataset{color:white}.dataset select{min-width:200px}.timeline{max-height:390px;overflow:auto;margin-top:10px}.timeline th{background:white}.timeline thead th{position:sticky;top:0}.match-link{text-align:left;background:none;color:var(--green);border:0;padding:0;text-decoration:underline}.local{margin-bottom:7px}.signals{padding-left:18px;margin:8px 0}.signals li{margin:8px 0}.signals b{font-size:.8rem}.footer{color:var(--muted);font-size:.8rem;margin-top:20px}.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}@media(max-width:730px){.filters{grid-template-columns:1fr 1fr}.panel{padding:14px}.wrap{width:calc(100% - 24px)}.table th,.table td{padding:8px 4px}.legend{margin-bottom:8px}}@media(max-width:390px){.filters{grid-template-columns:1fr}.table{font-size:.79rem}.pill{font-size:.68rem}}
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap">
+<div class="mast"><div class="brand">FBRPRO / Scouting workspace</div><div class="actions"><label class="dataset" id="dataset-picker">Dataset<select id="dataset"><option value="bund">Bundesliga · Leverkusen</option><option value="epl">Premier League · first 3 rounds</option><option value="file" disabled>Opened report</option></select></label><button id="upload" class="btn" type="button">Open JSON report</button><input id="file" type="file" accept=".json,application/json" hidden></div></div>
+<h1>Midfield Lab</h1><p>Explore the match evidence behind a player’s midfield profile.</p>
+<div id="meta" class="meta"></div>
+</div></header>
+<main class="wrap">
+<p id="status" class="status" role="status" aria-live="polite"></p>
+<section class="panel" aria-labelledby="controls"><h2 id="controls">Compare profiles</h2>
+<div class="filters">
+<label class="match-control">Match window<select id="match"></select></label>
+<label>Position group<select id="group"></select></label>
+<label>Player A<select id="a"></select></label>
+<label>Player B<select id="b"></select></label>
+</div>
+<div id="notice"></div>
+<p class="hint"><a href="#role-assessment">Jump to match roles ↓</a></p>
+</section>
+<div id="results"></div>
+<div class="footer">Reports are read in this browser. Uploaded files stay on this device.</div>
+</main>
+<script id="sample-data" type="application/json">null</script>
+<script id="epl-data" type="application/json">null</script>
+<script>
+"use strict";
+const by = id => document.getElementById(id);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const METRICS = [
+ ["progressive_passing","Progressive passes","per 100 eligible passes"],
+ ["progressive_pass_completion","Progressive pass completion","per 100 progressive passes with known outcomes"],
+ ["deep_progressive_passing","Deep progressive passes","per 100 eligible deep central passes"],
+ ["progressive_carrying","Progressive carries","per 100 eligible carries"],
+ ["deep_distribution","Deep distribution share","per 100 team deep central passes"],
+ ["advanced_distribution","Advanced distribution share","per 100 team advanced central passes"],
+ ["chance_creation","Passes linked to shots","per 100 eligible passes"],
+ ["advanced_chance_creation","Advanced passes linked to shots","per 100 eligible advanced central passes"],
+ ["pressing","Pressures","per 100 opponent possessions"],
+ ["midfield_interventions","Middle-third tackles and interceptions","per 100 opponent possessions"],
+ ["deep_interventions","Deep central tackles and interceptions","per 100 opponent possessions"],
+ ["box_involvement","Box shots and carries","per 100 team possessions"],
+];
+const ROLES = [["deep_lying_playmaker","Deep-lying playmaker"],["advanced_playmaker","Advanced playmaker"],["ball_winning_midfielder","Ball-winning midfielder"],["holding_midfielder","Holding midfielder"],["box_to_box_midfielder","Box-to-box midfielder"]];
+const LEGACY_STATUS = {unassessed:"Unassessed",candidate:"Candidate",below_pilot_threshold:"Below pilot threshold",reviewed:"Reviewed",match_observation:"Match observation",match_supported:"Supported in this match",match_below_rule:"Below match rule"};
+const GROUP = {defensive:"Defensive midfield",central:"Central midfield",attacking:"Attacking midfield"};
+const num = n => Number.isFinite(n) ? new Intl.NumberFormat("en",{maximumFractionDigits:1}).format(n) : "—";
+const pct = n => Number.isFinite(n) ? num(n * 100) + "%" : "—";
+const integer = n => Number.isSafeInteger(n) && n >= 0;
+const count = n => Number.isFinite(n) && n >= 0;
+const string = n => typeof n === "string" && n.length > 0;
+let report, sourceName, isSample;
+function validate(data){
+ if(!data || data.version!=="midfield-v0.1" || !Array.isArray(data.matches) || !Array.isArray(data.profiles)) throw Error("Choose an fbrpro midfield-v0.1 report.");
+ const ids = new Set();
+ for(const m of data.matches){
+  if(!m || !string(m.match_id) || ids.has(m.match_id)) throw Error("The match list has missing or duplicate IDs.");
+  ids.add(m.match_id);
+ }
+ function checkMetrics(metrics){
+  if(!metrics || typeof metrics!=="object" || Array.isArray(metrics)) throw Error("A profile has missing metrics.");
+  for(const [key] of METRICS){
+   const m = metrics[key];
+   if(m===undefined) continue;
+   if(!m || !integer(m.count) || !integer(m.denominator) || !integer(m.excluded) ||
+       !(m.per_100===null || count(m.per_100)) || !(m.coverage===null || (count(m.coverage) && m.coverage<=1)) ||
+       !Array.isArray(m.evidence) || m.evidence.some(e=>!e || !string(e.event_id) || !ids.has(e.match_id)))
+    throw Error("Invalid metric in report: "+key+".");
+  }
+ }
+ for(const p of data.profiles){
+  if(!p || !string(p.player_name) || !string(p.team_id) || !Array.isArray(p.scope) ||
+     !Object.hasOwn(GROUP,p.scope[2]) || !count(p.estimated_minutes) || !Array.isArray(p.matches) ||
+     !(p.roles || p.role_comparison)) throw Error("A player profile is incomplete.");
+  checkMetrics(p.metrics);
+  for(const m of p.matches){
+   if(!m || !ids.has(m.match_id) || !count(m.estimated_minutes)) throw Error("A profile references an invalid match.");
+   checkMetrics(m.metrics);
+  }
+ }
+ return data;
+}
+function option(select,value,label){
+ const opt=document.createElement("option");opt.value=value;opt.textContent=label;select.append(opt);
+}
+function load(data,name,sample=false){
+ const checked=validate(data);
+ report=checked;sourceName=name;isSample=sample;
+ by("match").replaceChildren();option(by("match"),"", "All report matches");
+ for(const m of report.matches) option(by("match"),m.match_id,matchLabel(m.match_id));
+ by("group").replaceChildren();option(by("group"),"","All midfield groups");
+ for(const [key,val] of Object.entries(GROUP)) if(report.profiles.some(p=>p.scope[2]===key)) option(by("group"),key,val);
+ by("meta").innerHTML=[sourceName,report.matches.length+" match"+(report.matches.length===1?"":"es"),report.profiles.length+" profiles"].map(x=>'<span class="badge">'+esc(x)+'</span>').join("");
+ setStatus(sample?sourceName+" · StatsBomb Open Data":"Loaded "+sourceName+".");
+ refresh(true);
+}
+function setStatus(text,error=false){by("status").textContent=text;by("status").classList.toggle("error",error)}
+function matchLabel(id){
+ const m=report.matches.find(x=>x.match_id===id);
+ return m ? [m.date,m.fixture || "Match "+(m.source_match_id ?? m.match_id)].filter(Boolean).join(" · ") : id;
+}
+function scoped(p){
+ if(!by("match").value) return {metrics:p.metrics, minutes:p.estimated_minutes,matches:p.matches.length};
+ const m=p.matches.find(m=>m.match_id===by("match").value);
+ return m ? {metrics:m.metrics,minutes:m.estimated_minutes,matches:1} : null;
+}
+function refresh(reset=false){
+ const oldGroup=reset?"":by("group").value;
+ const available=report.profiles.map((p,i)=>[p,i]).filter(([p])=>scoped(p));
+ by("group").replaceChildren();
+ option(by("group"),"","All midfield groups ("+available.length+")");
+ for(const [key,label] of Object.entries(GROUP)){
+  const n=available.filter(([p])=>p.scope[2]===key).length;
+  if(n)option(by("group"),key,label+" ("+n+")");
+ }
+ by("group").value=available.some(([p])=>p.scope[2]===oldGroup)?oldGroup:"";
+ by("group").disabled=!available.length;
+ const group=by("group").value;
+ const list=available.filter(([p])=>!group||p.scope[2]===group)
+  .sort(([a],[b])=>scoped(b).minutes-scoped(a).minutes||a.player_name.localeCompare(b.player_name));
+ for(const id of ["a","b"]){
+  const el=by(id), prev=reset?"":el.value;
+  el.replaceChildren();option(el,"",list.length?"Select a player":"No profiles");
+  for(const [p,i] of list) option(el,String(i),[p.player_name,p.team_name,GROUP[p.scope[2]],num(scoped(p).minutes)+" min"].filter(Boolean).join(" · "));
+  if(list.some(([,i])=>String(i)===prev)) el.value=prev;
+  else if(id==="a") el.value=String(list[0]?.[1] ?? "");
+  else {
+   const first=selected("a");
+   const peer=list.find(([p,i])=>String(i)!==by("a").value&&p.scope[2]===first?.scope[2]&&p.team_id===first?.team_id) ||
+     list.find(([p,i])=>String(i)!==by("a").value&&p.scope[2]===first?.scope[2]) ||
+     list.find(([,i])=>String(i)!==by("a").value);
+   el.value=peer?String(peer[1]):"";
+  }
+  el.disabled=!list.length;
+ }
+ render();
+}
+function selected(id){const v=by(id).value;return v===""?null:report.profiles[Number(v)]}
+function card(p,v,letter){
+ return p?'<article class="player '+letter+'"><div class="eyebrow">Player '+letter.toUpperCase()+'</div><h2>'+esc(p.player_name)+'</h2><div class="sub">'+esc([p.team_name,GROUP[p.scope[2]]].filter(Boolean).join(' · '))+' · '+num(v.minutes)+' estimated min · '+v.matches+' match'+(v.matches===1?"":"es")+'</div></article>':'<article class="player '+letter+' empty">Select Player '+letter.toUpperCase()+' to compare.</article>';
+}
+function metricCell(m,scale,letter){
+ if(!m || m.per_100===null || !m.denominator) return '<td><span class="sub">Unassessed</span>'+(m?.excluded?'<small>'+num(m.excluded)+' excluded</small>':'')+'</td>';
+ const evidence=m.evidence.length?'<details><summary>'+m.evidence.length+' supporting event IDs</summary><ul class="evidence">'+m.evidence.map(e=>'<li>'+esc(matchLabel(e.match_id))+'<br>'+esc(e.event_id)+'</li>').join("")+'</ul></details>':"";
+ return '<td><span class="val">'+num(m.per_100)+'</span><div class="bar" aria-hidden="true"><div class="fill '+letter+'" style="width:'+Math.min(100,100*m.per_100/scale)+'%"></div></div><small>'+num(m.count)+' / '+num(m.denominator)+' opportunities · '+pct(m.coverage)+' field coverage'+(m.excluded?' · '+num(m.excluded)+' excluded':'')+'</small>'+evidence+'</td>';
+}
+const scoreText=v=>Number.isFinite(v)?num(v)+"%":"—";
+function contextFor(p,matchOnly){
+ return matchOnly?p?.matches.find(m=>m.match_id===by("match").value):p;
+}
+function roleCell(p,k,matchOnly){
+ if(!p)return '<td>—</td>';
+ const v=contextFor(p,matchOnly)?.role_comparison?.[k];
+ if(!v)return '<td><small>This older report has no relative comparisons. Select a built-in dataset.</small></td>';
+ const titleFor=key=>METRICS.find(x=>x[0]===key)?.[1]??key;
+ const scored=Number.isFinite(v.comparison_pct);
+ const main=scored?'<span class="val">'+scoreText(v.comparison_pct)+'</span><small>Relative to '+num(v.peer_count)+' other midfielders</small>':
+  '<span class="pill">Not compared</span><small>'+esc(v.reason??"Evidence unavailable")+'</small>';
+ const details=scored&&Array.isArray(v.measures)?v.measures.filter(Boolean).map(m=>'<li><b>'+esc(titleFor(m.metric))+'</b><small>'+num(m.per_100)+' per 100 · '+num(m.count)+' actions / '+num(m.opportunities)+' opportunities</small><small>Higher than '+num(m.higher_than)+' · tied with '+num(m.tied_with)+' · lower than '+num(m.lower_than)+(m.leads?' · leads this measure':'')+'</small></li>').join(""):"";
+ return '<td>'+main+(details?'<details><summary>Compare the stats</summary><ul class="signals">'+details+'</ul></details>':'')+'</td>';
+}
+function labels(p,matchOnly){
+ const v=contextFor(p,matchOnly);
+ const names=(Array.isArray(v?.relative_labels)?v.relative_labels:[]).map(k=>v.role_comparison?.[k]?.label).filter(Boolean);
+ return names.length?names.map(x=>'<span class="pill candidate">'+esc(x)+'</span>').join(" "):'<small>No distinct label from available comparisons</small>';
+}
+function timeline(p,q,header){
+ const profiles=[p,q];
+ const dates=[...new Set(profiles.flatMap(p=>p?.matches.map(m=>m.match_id)||[]))]
+   .sort((a,b)=>matchLabel(a).localeCompare(matchLabel(b)));
+ const cell=(p,id)=>{
+  const m=p?.matches.find(x=>x.match_id===id);
+  if(!m)return '<td><small>No minutes in this position group</small></td>';
+  const details=(Array.isArray(m.relative_labels)?m.relative_labels:[]).map(k=>m.role_comparison?.[k]).filter(Boolean).map(v=>
+    '<span class="pill candidate">'+esc(v.label)+' '+scoreText(v.comparison_pct)+'</span>').join(" ");
+  return '<td>'+(details||'<small>No distinct label</small>')+'<small>'+num(m.estimated_minutes)+' min</small></td>';
+ };
+ return '<section class="panel" id="role-assessment"><h2>Match role timeline</h2><p class="hint">These labels compare players in the same match and position group. Choose a match to see the rates behind its label.</p>'+
+ '<div class="timeline"><table class="table">'+header.replace(">Measure<",">Match<")+'<tbody>'+dates.map(id=>'<tr><th scope="row"><button class="match-link" type="button" data-match="'+esc(id)+'">'+esc(matchLabel(id))+'</button></th>'+cell(p,id)+cell(q,id)+'</tr>').join("")+'</tbody></table></div></section>';
+}
+function render(){
+ const p=selected("a"),q=selected("b"),a=p&&scoped(p),b=q&&scoped(q),matchOnly=Boolean(by("match").value);
+ by("notice").innerHTML=p&&q&&(p===q || JSON.stringify(p.scope)!==JSON.stringify(q.scope))?'<p class="notice">'+(p===q?'The same profile is selected twice.':'These profiles are from different position groups or competition-seasons. Treat the comparison as descriptive.')+'</p>':'';
+ if(!a && !b){by("results").innerHTML='<section class="panel empty">No profiles match this selection.</section>';return}
+ const header='<thead><tr><th scope="col">Measure</th><th scope="col">'+esc(p?.player_name || "Player A")+'</th><th scope="col">'+esc(q?.player_name || "Player B")+'</th></tr></thead>';
+ const rows=METRICS.map(([key,label,unit])=>{
+  const l=a?.metrics[key],r=b?.metrics[key];
+  const scale=Math.max(100,l?.per_100??0,r?.per_100??0);
+  return '<tr><th scope="row">'+label+'<small>'+unit+'</small></th>'+metricCell(l,scale,"a")+metricCell(r,scale,"b")+'</tr>';
+ }).join("");
+ const scopeText=matchOnly?"Compares both teams in this match, within the same midfield position group.":"Compares pooled rates across the matches in this report, within the same competition, season and midfield group.";
+ const roleRows=ROLES.map(([k,name])=>{
+  const v=contextFor(p,matchOnly)?.role_comparison?.[k]||contextFor(q,matchOnly)?.role_comparison?.[k];
+  return '<tr><th scope="row">'+esc(v?.label||name)+(v?.definition?'<small>'+esc(v.definition)+'</small>':'')+'</th>'+roleCell(p,k,matchOnly)+roleCell(q,k,matchOnly)+'</tr>';
+ }).join("");
+ by("results").innerHTML='<div class="cards">'+card(p,a,"a")+card(q,b,"b")+'</div>'+
+ '<section class="panel" id="role-assessment"><h2>'+(matchOnly?'This match':'Across the report')+' · role comparison</h2>'+
+ '<p class="hint">'+scopeText+' Scores show the share of peers beaten, counting ties as half, averaged across the role’s measures. They are not probabilities or ability grades.</p>'+
+ '<table class="table">'+header+'<tbody><tr><th scope="row">Strongest measured pattern</th><td>'+labels(p,matchOnly)+'</td><td>'+labels(q,matchOnly)+'</td></tr>'+roleRows+'</tbody></table></section>'+
+ (!matchOnly?timeline(p,q,header).replace(' id="role-assessment"',''):'')+
+ '<details class="panel"><summary><b>All match statistics and event IDs</b></summary>'+
+ '<p class="hint">Passing completion measures execution. The role comparisons above use behaviour rates.</p>'+
+ '<table class="table">'+header+'<tbody>'+rows+'</tbody></table></details>';
+}
+function sample(){
+ const epl=by("dataset").value==="epl";
+ const data=JSON.parse(by(epl?"epl-data":"sample-data").textContent);
+ if(!data)return;
+ load(data,epl?"Premier League 2015/16 · rounds 1–3":"Bundesliga 2023/24 · Leverkusen’s 34 matches",true);
+}
+by("dataset").addEventListener("change",()=>{++uploadGeneration;sample()});
+by("upload").addEventListener("click",()=>by("file").click());
+let uploadGeneration=0;
+by("file").addEventListener("change",async e=>{
+ const file=e.target.files[0],generation=++uploadGeneration;e.target.value="";
+ if(!file)return;
+ try{
+  if(file.size>25*1024*1024)throw Error("This report exceeds 25 MB. Generate a report for a smaller match window.");
+  const data=JSON.parse(await file.text());
+  if(generation===uploadGeneration){load(data,file.name);by("dataset").value="file";}
+ }catch(err){if(generation===uploadGeneration)setStatus("Could not load report: "+err.message+" The previous report is still displayed.",true)}
+});
+by("results").addEventListener("click",e=>{
+ const button=e.target.closest("button[data-match]");
+ if(button){by("match").value=button.dataset.match;refresh();by("role-assessment")?.scrollIntoView();}
+});
+for(const id of ["match","group"]) by(id).addEventListener("change",()=>{if(report)refresh()});
+for(const id of ["a","b"]) by(id).addEventListener("change",render);
+if(by("sample-data").textContent.trim()==="null"){
+ by("dataset-picker").hidden=true;
+ for(const id of ["match","group","a","b"])by(id).disabled=true;
+ by("status").textContent="Open a midfield JSON report to begin.";
+ by("results").innerHTML='<section class="panel empty">Choose <b>Open JSON report</b> to compare midfield profiles.</section>';
+}else sample();
+</script>
+</body>
+</html>

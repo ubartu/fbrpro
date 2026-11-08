@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>FBRPRO · Video review</title>
+<style>
+:root{font:16px system-ui,sans-serif;color:#172e2a;background:#edf4ef}*{box-sizing:border-box}
+header{padding:26px max(20px,calc((100vw - 1080px)/2));background:#103733;color:white}
+h1,h2,p{margin:0 0 12px}h1{letter-spacing:-.04em}small,.hint{color:#465d56}
+main{max-width:1120px;margin:auto;padding:20px;display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
+section{padding:18px;border:1px solid #cadad0;border-radius:12px;background:white}
+.stack{display:grid;align-content:start;gap:16px}label{display:grid;gap:5px;margin:9px 0;font-weight:650;font-size:.88rem}
+input,select,button,textarea{font:inherit;max-width:100%;padding:7px;border:1px solid #afc3b7;border-radius:6px;background:white}
+button{cursor:pointer;background:#176454;color:white;border:0;padding:9px 12px}button:disabled{opacity:.5;cursor:default}
+video{width:100%;background:#142c28;border-radius:6px;min-height:100px;max-height:65vh}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.error{color:#8f3225}.status{margin:10px 0;min-height:1.4em}textarea{width:100%}
+summary{cursor:pointer;font-weight:700}.wide{grid-column:1/-1}@media(max-width:740px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><small style="color:#c2e6d7">FBRPRO / VIDEO ANALYZER</small><h1>Match clip review</h1><p>Align the clocks, open an event-selected clip, and record what you can see.</p></header>
+<main>
+<div class="stack">
+<section><h2>1. Open footage</h2><label>Local match video<input id="video-file" type="file" accept="video/*"></label>
+<video id="video" controls playsinline preload="metadata"></video>
+<p id="video-status" class="status" role="status">Video stays on this device.</p>
+</section>
+<section><details open><summary>Align video to the match clock</summary>
+<p class="hint">Use two known moments in one uninterrupted span. Match seconds reset to zero each half. Make separate segments around edits or breaks.</p>
+<div class="grid"><label>Match ID<input id="match-id"></label><label>Video ID<input id="video-id" placeholder="e.g. tactical-wide"></label>
+<label>Half<input id="period" type="number" min="1" value="1"></label>
+<label>Segment ID<input id="segment-id" placeholder="Optional"></label>
+<label>Start match seconds<input id="ms1" type="number" min="0" step=".001"></label>
+<label>Start video seconds<input id="vs1" type="number" min="0" step=".001"></label>
+<label>End match seconds<input id="ms2" type="number" min="0" step=".001"></label>
+<label>End video seconds<input id="vs2" type="number" min="0" step=".001"></label></div>
+<div class="row"><button id="take-start">Use playhead as start</button><button id="take-end">Use playhead as end</button></div>
+<div class="row" style="margin-top:8px"><button id="add-segment">Add segment</button><button id="download-alignment">Export alignment</button></div>
+<ul id="segments"></ul><p id="alignment-status" class="status" role="status"></p>
+</details></section>
+</div>
+<div class="stack">
+<section><h2>2. Choose a clip</h2>
+<label>Clip plan JSON<input id="plan-file" type="file" accept="application/json,.json"></label>
+<p id="plan-status" class="status" role="status">Generate the clip plan from your alignment and match events.</p>
+<label>Clip<select id="clip" disabled></select></label>
+<div class="row"><button id="play" disabled>Play selected clip</button><span id="clip-time" class="hint"></span></div>
+<label>Opportunity within the clip<select id="opportunity" disabled></select></label>
+</section>
+<section><h2>3. Record evidence</h2>
+<label>Player<select id="player" disabled></select></label>
+<label>Behaviour<select id="behaviour"><option value="screening">Screening the back line</option><option value="deep_to_advanced">Deep-to-advanced run</option></select></label>
+<label>Observation<select id="observation"><option value="observed">Observed</option><option value="not_observed">Visible; behaviour not observed</option><option value="unobservable">Unobservable / uncertain</option></select></label>
+<label>Review note<textarea id="notes" rows="3" placeholder="What was visible? Where was the player?"></textarea></label>
+<div class="row"><button id="save-tag" disabled>Save observation</button><button id="export-tags" disabled>Export observations</button></div>
+<p id="tag-status" class="status" role="status"></p><ul id="tags"></ul>
+<p class="hint">Observations apply only to these clips. Save the exported JSON before closing this page.</p>
+</section>
+</div>
+</main>
+<script src="review.js"></script>
+</body>
+</html>

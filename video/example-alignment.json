@@ -1,0 +1,14 @@
+{
+  "match_id": "replace-with-canonical-or-source-match-id",
+  "video_id": "tactical-wide-example",
+  "segments": [
+    {
+      "id": "half-1-live",
+      "period": 1,
+      "match_start_ms": 0,
+      "match_end_ms": 60000,
+      "video_start_ms": 30000,
+      "video_end_ms": 90000
+    }
+  ]
+}

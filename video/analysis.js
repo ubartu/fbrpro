@@ -339,6 +339,8 @@ function renderFrame(){
   if(plotted)showPitchMessage("");
   else if(frame.pitch_boundary_status==="unavailable")
     showPitchMessage("Pitch outline unavailable","Try a wider view with clear field lines.");
+  else if(mappedFrame)
+    showPitchMessage("No verified positions at this moment","Use Jump to calibrated frame to see positions on the pitch.");
   else if(uncalibrated||frame.calibration_status==="uncalibrated")
     showPitchMessage("Pitch positions need calibration",hasVideo?
       "Review detections over the footage. Camera calibration is required to plot their positions.":
@@ -367,6 +369,7 @@ function configureTimeline(){
   timeline.value=String(hasVideo?Math.round(video.currentTime*1000):replayMs);
   renderClipMarkers(min,max);
   $("first-sample").hidden=!frames?.length||Boolean(getMismatch(tracking,clipPlan));
+  $("first-mapped").hidden=!mappedFrame||Boolean(getMismatch(tracking,clipPlan));
   queueFrame();
 }
 function seek(ms){
@@ -382,6 +385,7 @@ function seek(ms){
 }
 $("timeline").addEventListener("input",e=>seek(Number(e.target.value)));
 $("first-sample").onclick=()=>seek(tracking?.frames[0]?.video_time_ms);
+$("first-mapped").onclick=()=>seek(mappedFrame?.video_time_ms);
 $("show-boxes").addEventListener("change",()=>{
   showOverlayControl();lastFrame=undefined;footageLayer.replaceChildren();queueFrame();
 });
@@ -396,8 +400,14 @@ video.addEventListener("emptied",()=>{
   $("video-stage").classList.add("empty");$("video-empty").hidden=false;
   footageLayer.setAttribute("hidden","");footageLayer.replaceChildren();configureTimeline();renderMetrics();
 });
+let mappedFrame;
+function hasMappedPlayers(frame){
+  return frame.calibration_status==="verified"&&frame.objects.some(o=>o.object_type==="player"&&
+    o.observed&&o.projection_status==="verified"&&finite(o.x_m)&&finite(o.y_m));
+}
 function setupTracking(data,name){
   tracking=data; lastFrame=undefined;lastMessage=undefined;
+  mappedFrame=data.frames.find(hasMappedPlayers);
   pitchLayer.replaceChildren();footageLayer.replaceChildren();
   const teams=new Set(), shots=new Map();
   shotByFrame=new WeakMap();
@@ -537,7 +547,7 @@ document.addEventListener("fbrpro:plan",e=>{
   pitchLayer.replaceChildren();footageLayer.replaceChildren();configureTimeline();renderMetrics();
 });
 
-let localApp=false, sampleAvailable=false, sampleHasPlan=false, uploadLimit, fullUploadLimit, fullDurationLimit;
+let localApp=false, sampleAvailable=false, sampleHasPlan=false, uploadLimit, fullUploadLimit, fullDurationLimit, calibrationLimit;
 let analysisRequest, analysisJob, previewFile;
 let exportedPreview;
 const analysisButton=$("analyze-video"), fullButton=$("analyze-full"), demoButton=$("demo-load");
@@ -561,6 +571,8 @@ function updateAnalysisControls(){
   $("local-app-link").hidden=localApp;
   saveTracking.hidden=!exportedPreview;
   saveTracking.disabled=busy;
+  $("calibration-controls").hidden=!positive(calibrationLimit);
+  $("calibration-file").disabled=busy||!ready;
 }
 async function api(path, options){
   const response=await fetch(path,options);
@@ -705,6 +717,7 @@ demoButton.onclick=()=>runFromPage(async signal=>{
   const file=new File([blob],"DFL sample.mp4",{type:blob.type||"video/mp4"});
   await loadPreviewVideo(file,signal);
   if(signal.aborted)return;
+  $("calibration-file").value="";
   previewReports(plan,report,"DFL sample tracking");
   previewFile=file;
   exportedPreview=report;
@@ -712,24 +725,38 @@ demoButton.onclick=()=>runFromPage(async signal=>{
   analysisStatus("Real match demo loaded. Use the clip markers or press Play. Pitch positions are available near the start; the ball and player identities are unverified.");
 });
 function showTrackingResult(report,full){
-  let count=0, gaps=0, withheld=false, rejected=false;
+  let count=0, gaps=0, mapped=0, withheld=false, rejected=false;
   for(const frame of report.frames){
     if(frame.objects.some(o=>o.observed&&o.object_type==="player"))count++;
     if(frame.pitch_boundary_status==="unavailable")gaps++;
+    if(hasMappedPlayers(frame))mapped++;
     withheld ||= frame.pitch_unavailable_candidates>0;
     rejected ||= frame.off_pitch_candidates>0;
   }
+  const pitchSummary=mapped?fmt(mapped)+" sampled frames have verified pitch positions.":
+    "Pitch replay needs verified camera calibration. Add calibration for this footage and run again.";
   if(full){
     analysisStatus("Full video tracking complete · "+fmt(report.frames.length)+" sampled frames · "+
       fmt(count)+" with on-pitch detections · "+fmt(gaps)+" without a usable pitch outline. Use the replay "+
-      "controls to review coverage. Pitch positions and goalkeeper hints require camera calibration.");
+      "controls to review coverage. "+pitchSummary);
     return;
   }
-  analysisStatus(count?fmt(count)+" sampled frames with on-pitch detections. Use the overlay to review them. Pitch positions and goalkeeper hints require camera calibration.":
+  analysisStatus(count?fmt(count)+" sampled frames with on-pitch detections. "+pitchSummary:
     withheld?"People were detected in this window, but a pitch outline was unavailable. Try a wide shot with clear field lines.":
     gaps&&gaps===report.frames.length?"The pitch outline was unavailable in this window. Try a wide shot with clear field lines.":
     rejected?"People were detected outside the pitch. Move the playhead to a wide shot with players and try again.":
     "No people were detected in this window. Move the playhead to a clearer wide shot and try again.");
+}
+async function trackingHeaders(){
+  const file=$("calibration-file").files[0];
+  if(!file||!positive(calibrationLimit))return trackHeaders;
+  if(file.size>calibrationLimit)throw Error("Choose a smaller calibration JSON file.");
+  let data;
+  try{data=JSON.parse(await file.text());}
+  catch{throw Error("Choose a valid calibration JSON file.");}
+  const encoded=encodeURIComponent(JSON.stringify(data));
+  if(encoded.length>calibrationLimit)throw Error("This calibration file is too large for browser tracking.");
+  return {...trackHeaders,"X-FBRPRO-Calibration":encoded};
 }
 function trackFromPage(full){
   return runFromPage(async (signal,job)=>{
@@ -749,7 +776,8 @@ function trackFromPage(full){
     video.pause();
     analysisStatus(full?"Tracking the full video from the start. Keep this page open while the local app works.":
       "Tracking people in "+clock(start)+"–"+clock(end)+". This can take a moment.");
-    const report=await api("/api/track?"+query,{method:"POST",signal,headers:trackHeaders,body:file})
+    const headers=await trackingHeaders();
+    const report=await api("/api/track?"+query,{method:"POST",signal,headers,body:file})
       .then(r=>r.json());
     if(signal.aborted||activeVideoFile!==file)return;
     if(full&&report.analysis_scope!=="full_video")
@@ -757,7 +785,7 @@ function trackFromPage(full){
     previewReports(report.preview_plan,report,full?"Full video tracking":"New tracking preview");
     previewFile=file;
     exportedPreview=report;
-    seek(report.frames[0]?.video_time_ms??start);
+    seek(mappedFrame?.video_time_ms??report.frames[0]?.video_time_ms??start);
     showTrackingResult(report,full);
   },full);
 }
@@ -770,8 +798,10 @@ for(const event of ["loadedmetadata","emptied","error"])video.addEventListener(e
 $("video-file").addEventListener("change",e=>{
   if(activeVideoFile!==e.target.files[0])return;
   interruptAnalysis();
+  $("calibration-file").value="";
   if(previewFile&&previewFile!==activeVideoFile){
     tracking=undefined;previewFile=undefined;lastFrame=undefined;
+    mappedFrame=undefined;
     exportedPreview=undefined;
     pitchLayer.replaceChildren();footageLayer.replaceChildren();
     $("track-chip").textContent="Waiting for tracking";
@@ -796,6 +826,7 @@ if(/^https?:$/.test(globalThis.location?.protocol||"")){
     localApp=true;sampleAvailable=info.demo_available;sampleHasPlan=info.demo_plan_available===true;
     uploadLimit=info.max_upload_bytes;
     fullUploadLimit=info.max_full_upload_bytes;fullDurationLimit=info.max_full_video_ms;
+    calibrationLimit=info.max_calibration_header;
     $("analysis-hint").textContent=(sampleAvailable?"Try the real match demo, or open your own video. ":"Open a video. ")+
       (positive(fullUploadLimit)?"Track the next 8 seconds for a quick check, or track the full recording from the start.":
        "Track a short window from the playhead.");

@@ -1,4 +1,5 @@
 from http.client import parse_headers
+import hashlib
 from io import BytesIO
 import json
 from pathlib import Path
@@ -7,6 +8,7 @@ from threading import Lock
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.parse import quote
 from uuid import uuid4
 
 from football_normalizer import video_ui
@@ -33,7 +35,7 @@ class ReviewServerTests(unittest.TestCase):
         tracking.write_text("{}")
         self.server = SimpleNamespace(
             hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx",
-            demo={"video": video, "tracking": tracking}, job=Lock(), active_job=None)
+            demo={"video": video, "tracking": tracking}, demo_calibration=None, job=Lock(), active_job=None)
 
     def call(self, method, path, *, headers=None, body=None):
         fields = {"Host": "127.0.0.1:8765"}
@@ -95,6 +97,7 @@ class ReviewServerTests(unittest.TestCase):
         job = uuid4()
         progress_url = f"/api/progress?job={job}"
         self.assertEqual(self.call("GET", progress_url)[0], 404)
+
         captured = []
 
         def track(source, plan, model, calibration, *, through_eof, on_progress, **kwargs):
@@ -127,6 +130,37 @@ class ReviewServerTests(unittest.TestCase):
             self.assertEqual((window["video_end_ms"], window["match_end_ms"]), (22_100, 22_100))
         self.assertFalse(captured[0].exists())
         self.assertEqual(self.call("GET", progress_url)[0], 404)
+
+    def test_calibration_is_reused_only_for_matching_video_or_explicit_upload(self):
+        guard = {"X-FBRPRO-Video": "1"}
+        demo_bytes = self.server.demo["video"].read_bytes()
+        self.server.demo_size = len(demo_bytes)
+        self.server.demo_hash = hashlib.sha256(demo_bytes).hexdigest()
+        self.server.demo_calibration = {
+            "coordinate_length_m": 105, "coordinate_width_m": 68,
+            "segments": [{"segment_id": "source-shot", "video_start_ms": 0, "video_end_ms": 4000,
+                          "follow_camera": True}],
+        }
+        calls = []
+
+        def track(source, plan, model, calibration, **kwargs):
+            calls.append(calibration)
+            return {"frames": [], "clips": [{"video_end_ms": 30_000}]}
+
+        with (patch.object(video_ui, "disk_usage", return_value=SimpleNamespace(free=1 << 32)),
+              patch.object(video_ui, "estimate_duration_ms", return_value=30_000),
+              patch.object(video_ui.video_tracking, "run", side_effect=track)):
+            self.assertEqual(self.call("POST", "/api/track?mode=full", headers=guard, body=demo_bytes)[0], 200)
+            self.assertEqual(self.call("POST", "/api/track?mode=full", headers=guard, body=b"abcdefghij")[0], 200)
+            self.assertEqual(self.call("POST", "/api/track?start_ms=1000&end_ms=5000",
+                                       headers=guard, body=demo_bytes)[0], 200)
+            own = {"coordinate_length_m": 100, "coordinate_width_m": 60, "segments": [{"segment_id": "fixed"}]}
+            headers = {**guard, "X-FBRPRO-Calibration": quote(json.dumps(own))}
+            self.assertEqual(self.call("POST", "/api/track?mode=full", headers=headers, body=b"abcdefghij")[0], 200)
+        self.assertEqual(calls[0]["segments"][0]["segment_id"], "preview-segment")
+        self.assertEqual(calls[1]["segments"], [])
+        self.assertEqual(calls[2]["segments"], [])
+        self.assertEqual(calls[3]["coordinate_length_m"], 100)
 
     def test_full_video_rejects_limits_and_honors_cancellation(self):
         job = uuid4()

@@ -3,6 +3,7 @@ import argparse
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import json
 import math
 import mimetypes
@@ -11,7 +12,7 @@ import re
 from shutil import disk_usage
 from tempfile import TemporaryDirectory
 from threading import Event, Lock
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import UUID, uuid4
 
 from . import video, video_tracking
@@ -33,6 +34,9 @@ DISK_RESERVE_BYTES = 512 * 1024 * 1024
 MAX_WINDOW_MS = 15_000
 MAX_VIDEO_MS = video_tracking.MAX_FULL_VIDEO_MS
 CHUNK_SIZE = 1024 * 1024
+MAX_CALIBRATION_HEADER = 16000
+EMPTY_CALIBRATION = {"coordinate_length_m": 105, "coordinate_width_m": 68,
+                     "dimensions_assumed": True, "segments": []}
 
 
 def preview_plan(start, end, scope="video_preview"):
@@ -64,6 +68,30 @@ def estimate_duration_ms(path):
         return None
     finally:
         cap.release()
+
+
+def calibration_for_window(data, plan, start, end):
+    """Map video-relative landmarks to the browser's video-only plan."""
+    if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
+        raise ValueError("Calibration needs a JSON object with a segments array.")
+    if not data["segments"]:
+        raise ValueError("Calibration needs at least one camera segment.")
+    segment_id = plan["alignment_segments"][0]["id"]
+    segments = []
+    for row in data["segments"]:
+        if not isinstance(row, dict):
+            raise ValueError("Each camera segment must be a JSON object.")
+        a, b = row.get("video_start_ms"), row.get("video_end_ms")
+        if a is None and b is None:
+            segments.append({**row, "segment_id": segment_id})
+            continue
+        if not (type(a) is type(b) is int and 0 <= a < b <= MAX_VIDEO_MS):
+            raise ValueError("Camera segments need increasing video times in milliseconds.")
+        if a >= end or b <= start or (row.get("follow_camera") and a < start):
+            continue
+        segments.append({**row, "segment_id": segment_id, "video_start_ms": max(start, a),
+                         "video_end_ms": min(end, b)})
+    return {**data, "video_id": plan["video_id"], "segments": segments}
 
 
 def job_id(fields):
@@ -99,10 +127,16 @@ class FullVideoJob:
 
 
 class ReviewServer(ThreadingHTTPServer):
-    def __init__(self, port, model, demo=None):
+    def __init__(self, port, model, demo=None, demo_calibration=None):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
         self.demo = demo or {}
+        self.demo_calibration = demo_calibration
+        if demo_calibration is not None:
+            source = self.demo["video"]
+            self.demo_size = source.stat().st_size
+            with source.open("rb") as handle:
+                self.demo_hash = hashlib.file_digest(handle, "sha256").hexdigest()
         self.job = Lock()
         self.active_job = None
         self.hosts = {f"127.0.0.1:{self.server_port}", f"localhost:{self.server_port}"}
@@ -225,7 +259,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                            "demo_plan_available": "plan" in demo,
                                            "max_upload_bytes": MAX_UPLOAD_BYTES, "max_window_ms": MAX_WINDOW_MS,
                                            "max_full_upload_bytes": MAX_FULL_UPLOAD_BYTES,
-                                           "max_full_video_ms": MAX_VIDEO_MS})
+                                           "max_full_video_ms": MAX_VIDEO_MS,
+                                           "max_calibration_header": MAX_CALIBRATION_HEADER})
         elif path == "/api/progress":
             job = self.requested_job(target)
             if job:
@@ -287,6 +322,15 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self.error(HTTPStatus.TOO_MANY_REQUESTS, "Tracking is already running. Try again when it finishes.")
             return
         try:
+            raw_calibration = self.headers.get("X-FBRPRO-Calibration")
+            if raw_calibration and len(raw_calibration) > MAX_CALIBRATION_HEADER:
+                raise ValueError("The calibration file is too large for the browser upload.")
+            calibration = json.loads(unquote(raw_calibration)) if raw_calibration else None
+            if raw_calibration and not isinstance(calibration, dict):
+                raise ValueError("Choose a valid calibration JSON file.")
+            demo_calibration = self.server.demo_calibration
+            digest = hashlib.sha256() if (calibration is None and demo_calibration is not None
+                                          and size == self.server.demo_size) else None
             self.server.active_job = full
             with TemporaryDirectory(prefix="fbrpro-video-") as work:
                 directory = Path(work)
@@ -302,7 +346,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
                         if not block:
                             raise ValueError("The video upload ended early.")
                         output.write(block)
+                        if digest is not None:
+                            digest.update(block)
                         size -= len(block)
+                if digest is not None and digest.hexdigest() == self.server.demo_hash:
+                    calibration = demo_calibration
                 scope = "full_video" if full else "video_preview"
                 options = {}
                 if full:
@@ -314,10 +362,14 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     full.stage = "tracking"
                     options = {"through_eof": True, "on_progress": full.progress}
                 plan = preview_plan(start, end, scope)
-                report = video_tracking.run(source, plan, self.server.model, {
-                    "coordinate_length_m": 105, "coordinate_width_m": 68,
-                    "dimensions_assumed": True, "segments": [],
-                }, confidence=.23, **options)
+                if calibration is not None:
+                    # The full run reads to EOF, even when its duration hint is short.
+                    if full:
+                        plan["alignment_segments"][0].update(video_end_ms=MAX_VIDEO_MS, match_end_ms=MAX_VIDEO_MS)
+                    calibration = calibration_for_window(calibration, plan, start, MAX_VIDEO_MS if full else end)
+                report = video_tracking.run(source, plan, self.server.model,
+                                            EMPTY_CALIBRATION if calibration is None else calibration,
+                                            confidence=.23, **options)
                 source.unlink()
                 if full:
                     actual_end = report["clips"][0]["video_end_ms"]
@@ -357,11 +409,14 @@ def main(argv=None):
     parser.add_argument("--demo-video", type=Path)
     parser.add_argument("--demo-tracking", type=Path)
     parser.add_argument("--demo-plan", type=Path)
+    parser.add_argument("--demo-calibration", type=Path, help="Calibration for the exact demo video")
     args = parser.parse_args(argv)
     demo = {name: value for name in ("video", "tracking", "plan")
             if (value := getattr(args, "demo_" + name)) is not None}
     if demo and not {"video", "tracking"} <= demo.keys():
         parser.error("Supply --demo-video and --demo-tracking together.")
+    if args.demo_calibration and "video" not in demo:
+        parser.error("--demo-calibration requires the demo video.")
     if not 1 <= args.port <= 65535:
         parser.error("Choose a port between 1 and 65535.")
     if not all(path.is_file() for path in (args.model, *demo.values())):
@@ -370,7 +425,10 @@ def main(argv=None):
         parser.error("Run the workbench from a project checkout with the video and dashboard pages.")
     try:
         video_tracking.vision()
-        with ReviewServer(args.port, args.model, demo) as server:
+        calibration = json.loads(args.demo_calibration.read_text()) if args.demo_calibration else None
+        if args.demo_calibration:
+            video_tracking.calibration_from(calibration, 2)
+        with ReviewServer(args.port, args.model, demo, calibration) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

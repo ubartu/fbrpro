@@ -32,13 +32,20 @@ Choose **Match video**, then choose a tracking mode:
   This mode accepts videos up to 256 MB.
 
 Both modes draw the pitch outline and on-pitch detections over the footage and
-can save a tracking report. The local app processes temporary video files on
-this computer and removes them when the run ends. For pitch projections and
-individual movement rates, follow the aligned fixture workflow below.
+can save a tracking report. To add pitch replay for your own video, open
+**Add camera calibration** in the replay panel and choose a [calibration JSON
+for that exact recording](#calibration-format) before running tracking. **Jump
+to calibrated frame** appears when verified player positions are available.
+For a moving shot, use full video tracking so the tracker can read its
+calibration reference frame. The local app removes temporary video files when
+the run ends. For individual movement rates, follow the aligned fixture
+workflow below.
 
 Add `--demo-video /path/to/sample.mp4 --demo-tracking /path/to/video-tracking.json
 --demo-plan /path/to/clip-plan.json` to enable **Load real match demo**.
 The demo loads the matching footage, tracking and clip markers together.
+Add `--demo-calibration /path/to/calibration.json` to reuse the camera
+calibration when tracking that exact demo file again.
 
 ### Pitch, shirts and goalkeeper hints
 
@@ -57,8 +64,8 @@ The demo loads the matching footage, tracking and clip markers together.
 - **GK?** marks a probable goalkeeper when a distinct shirt and a continuous
   run of verified positions near one goal support the hint. An ordinary
   outline does not establish where the goals are. Upload previews without
-  camera calibration can show kit groups and boxes. Use the aligned fixture
-  workflow for goalkeeper hints and pitch positions.
+  camera calibration can show kit groups and boxes. Add a calibration file
+  before running tracking to enable goalkeeper hints and pitch positions.
 
 ## Run a fixture
 

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from football_normalizer.video_motion import CameraMotion
 from football_normalizer.video_tracking import (
     CameraFollow, Detection, Tracker, calibration_from, canonical_rows, identity_from, kit_sample, object_row,
     pitch_detections, run,
@@ -16,6 +17,36 @@ def person(x):
 
 
 class TrackingTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
+                         "optional vision dependencies not installed")
+    def test_camera_motion_estimates_a_pan_and_resets_between_shots(self):
+        import cv2
+        import numpy as np
+
+        texture = np.random.default_rng(9).integers(0, 256, (90, 160, 3), dtype=np.uint8)
+        source = cv2.resize(texture, (480, 270))
+        target = cv2.warpAffine(source, np.float32([[1, 0, 9], [0, 1, 5]]), (480, 270))
+        motion = CameraMotion(cv2, np)
+        self.assertIsNone(motion.update(source, []))
+        pan = motion.update(target, [(30, 50, 100, 140)])
+        self.assertIsNotNone(pan)
+        np.testing.assert_allclose(pan[:, 2], [9, 5], atol=1)
+        motion.reset()
+        self.assertIsNone(motion.update(target, []))
+
+    def test_camera_pan_keeps_track_identity_when_boxes_no_longer_overlap(self):
+        class Shift:
+            def __matmul__(self, point):
+                x, y, _ = point
+                return x+100, y
+
+        tracker = Tracker("pan")
+        first, = tracker.update([person(10)], 0)
+        moved, = tracker.update([person(110)], 200, Shift())
+        self.assertEqual(moved.id, first.id)
+        self.assertEqual(moved.last.box, person(110).box)
+        self.assertFalse(moved.missing)
+
     def test_full_video_reads_past_duration_hint_until_decoder_eof(self):
         timestamps = [0, 40, 80, 250, 310, 420, 600]
         reads = iter(enumerate(timestamps))

@@ -16,11 +16,12 @@ from pathlib import Path
 
 from .video import VERSION as PLAN_VERSION, segments_from
 from .video_auto_calibration import PitchModel
+from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
 from .video_roles import annotate_video_roles
 
 VERSION = "fbrpro-video-tracking-v1"
-TRACK_ID_SCOPE = "pitch-v1"
+TRACK_ID_SCOPE = "pitch-v2"
 MAX_FULL_VIDEO_MS = 6 * 60 * 60 * 1000
 
 
@@ -170,8 +171,23 @@ class Tracker:
     def reset(self):
         self.active = []
 
-    def update(self, detections, time_ms):
+    def assign(self, options, detection_count):
+        return sorted(options)
+
+    def update(self, detections, time_ms, camera_transform=None):
         self.active = [t for t in self.active if time_ms-t.seen_ms <= self.max_gap_ms]
+        if camera_transform is not None:
+            def warp(detection):
+                x1, y1, x2, y2 = detection.box
+                points = [camera_transform @ (x, y, 1) for x in (x1, x2) for y in (y1, y2)]
+                xs, ys = zip(*points)
+                return replace(detection, box=(min(xs), min(ys), max(xs), max(ys)))
+
+            for track in self.active:
+                track.last = warp(track.last)
+                if track.previous:
+                    previous, seen = track.previous
+                    track.previous = (warp(previous), seen)
         options = []
         for i, t in enumerate(self.active):
             dx = dy = 0.0
@@ -198,7 +214,7 @@ class Tracker:
                                     and d.kit_color and t.kit_sample != d.kit_color)
                     options.append((distance + (1-overlap)*.60 + (.45 if kit_conflict else 0), i, j))
         used_tracks, used_detections = set(), set()
-        for _, i, j in sorted(options):
+        for _, i, j in self.assign(options, len(detections)):
             if i in used_tracks or j in used_detections:
                 continue
             t = self.active[i]
@@ -560,6 +576,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         observed_ids = set()
         for start, end, clip, segment in windows:
             tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=TRACK_ID_SCOPE)
+            camera_motion = CameraMotion(cv2, np)
             if not through_eof and not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
             # Do not invent clock from frame index/FPS when the decoder has no timestamps.
@@ -622,6 +639,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 period_ms = video_ms if through_eof else segment.period_time(video_ms)
                 if pending_cut:
                     tracker.reset()
+                    camera_motion.reset()
                 if pitch_model is not None and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
                         automatic_model = PitchModel(cv2, np, pitch_model, length, width)
@@ -634,7 +652,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     cv2, np, img, detector, cal, length, width)
                 counters["off_pitch_candidates"] += off_pitch
                 counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
-                tracks = tracker.update(detections, video_ms)
+                motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
+                tracks = tracker.update(detections, video_ms, motion)
                 rows = [object_row(t, cal, length, width, identities) for t in tracks]
                 for track, row in zip(tracks, rows):
                     color = track.last.kit_color
@@ -660,6 +679,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "calibration_fit_rms_m": cal.rms_m if cal else None,
                                "calibration_check_max_m": cal.check_max_m if cal else None,
                                "camera_cut_suspected": pending_cut,
+                               "camera_motion_compensated": motion is not None,
                                "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
                                "off_pitch_candidates": off_pitch, "objects": rows})
                 pending_cut = False
@@ -691,6 +711,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "sample_fps": sample_fps, "confidence_threshold": confidence, "max_calibration_error_m": max_error_m,
             "detector": "opencv-zoo-yolox-s-coco", "source_sha256": source_hash, "model_sha256": model_hash,
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
+            "tracker": "camera_compensated_motion_iou_kit",
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
             "kit_color_policy": "review hint from two agreeing torso samples",
             "automatic_calibration": bool(pitch_model),

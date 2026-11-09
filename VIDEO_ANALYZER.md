@@ -236,3 +236,33 @@ Validated tactical measurements require synchronized footage, confirmed
 rosters, and independent movement reviews on held-out fixtures. The current
 tracker still relies on manually seeded calibration and analyst-confirmed
 identity; it has no full-match automated replay or lineup recognition.
+
+## Compare tracking backends
+
+The tracker estimates camera motion from background features outside the
+detected people. When those features agree, it moves the previous track
+positions with the camera before associating them with the next detections.
+The report marks the frames where it used compensation. Reviewed identity
+maps from earlier tracker versions need a fresh track export.
+
+For research evaluation, use extracted MOT sequences from
+[SoccerNet Tracking](https://huggingface.co/datasets/SoccerNet/SN-Tracking-2023).
+Use a separate environment for the evaluation packages.
+
+```sh
+python -m pip install 'opencv-python>=4.11,<5' 'trackeval==1.3.0' 'supervision==0.25.1'
+python -m football_normalizer.video_benchmark /path/to/SNMOT-116 /path/to/SNMOT-134 /path/to/SNMOT-187 \
+  --model /path/to/object_detection_yolox_2022nov.onnx --output benchmark-yolox
+python -m football_normalizer.video_benchmark /path/to/SNMOT-116 /path/to/SNMOT-134 /path/to/SNMOT-187 \
+  --detector football --model /path/to/football.onnx --output benchmark-football
+```
+
+The second command uses the 640 px FP32
+[Collabora football detector export](https://huggingface.co/boxerab/gst-python-ml-football).
+It also supports `--coreml` with ONNX Runtime and the CoreML provider. Both
+detectors use a confidence floor of 0.23. The default stride scores every
+fifth source frame. The evaluation applies the same estimated image-space
+pitch mask to both the annotations and detections, and excludes ball boxes.
+It exports sampled MOT text files and reports TrackEval HOTA, DetA, AssA,
+and ID switches. These are scoped comparisons against FBRPRO's processing
+settings and differ from the official challenge protocol.

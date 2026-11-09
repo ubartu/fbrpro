@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .video import VERSION as PLAN_VERSION, segments_from
 from .video_auto_calibration import PitchModel
+from .video_ball import BallDetector, BallTracker
 from .video_inference import load_inference
 from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
@@ -512,7 +513,7 @@ def small_frame(cv2, frame):
 
 def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=5.0,
         confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None,
-        pitch_model=None, inference_backend="opencv", inference_cache=None):
+        pitch_model=None, ball_model=None, inference_backend="opencv", inference_cache=None):
     """Return a tracking manifest and pitch replay observations for selected clips."""
     if not isinstance(plan, dict) or plan.get("version") != PLAN_VERSION:
         raise ValueError("Expected a versioned fbrpro clip plan")
@@ -560,6 +561,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         raise ValueError("Full video tracking needs one video-only window starting at zero")
     detector = YoloX(model, confidence, inference_backend=inference_backend, inference_cache=inference_cache)
     automatic_model = None
+    ball_detector = BallDetector(cv2, np, ball_model, inference_backend=inference_backend,
+                                 inference_cache=inference_cache) if ball_model else None
     cap = cv2.VideoCapture(str(video_path))
     try:
         if not cap.isOpened():
@@ -570,7 +573,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         frames, summaries = [], []
         observed_ids = set()
         for start, end, clip, segment in windows:
-            tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=TRACK_ID_SCOPE)
+            scope = f"{TRACK_ID_SCOPE}-ball" if ball_detector else TRACK_ID_SCOPE
+            tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=scope)
+            ball_tracker = BallTracker(clip["id"], frame_width) if ball_detector else None
             camera_motion = CameraMotion(cv2, np)
             if not through_eof and not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
@@ -635,6 +640,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 if pending_cut:
                     tracker.reset()
                     camera_motion.reset()
+                    if ball_tracker:
+                        ball_tracker.reset()
                 if pitch_model is not None and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
                         automatic_model = PitchModel(cv2, np, pitch_model, length, width,
@@ -647,6 +654,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                         counters["automatically_calibrated_frames"] += 1
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
                     cv2, np, img, detector, cal, length, width)
+                if ball_detector:
+                    detections = [d for d in detections if d.object_type == "player"]
                 counters["off_pitch_candidates"] += off_pitch
                 counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
                 motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
@@ -656,6 +665,17 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     color = track.last.kit_color
                     if not track.missing and color is not None and color == track.kit_sample:
                         row["kit_color_hint"] = color
+                if ball_tracker:
+                    candidates = [Detection("ball", score, box)
+                                  for score, box in ball_detector.detect(img, boundary)]
+                    ball = ball_tracker.update(candidates, video_ms, motion)
+                    if ball is not None:
+                        rows.append(object_row(ball, cal, length, width, identities))
+                    ball_status = ("observed" if ball and not ball.missing else
+                                   "missing" if boundary is not None else "pitch_unavailable")
+                else:
+                    ball_status = ("observed" if any(row["object_type"] == "ball" and row["observed"]
+                                                     for row in rows) else "missing")
                 observed_ids.update(t.id for t in tracks if not t.missing and t.last.object_type == "player")
                 seen_players = set()
                 for row in rows:
@@ -678,6 +698,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "camera_cut_suspected": pending_cut,
                                "camera_motion_compensated": motion is not None,
                                "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
+                               "ball_status": ball_status,
                                "off_pitch_candidates": off_pitch, "objects": rows})
                 pending_cut = False
                 sampled += 1
@@ -700,6 +721,10 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
     with Path(model).open("rb") as handle:
         model_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    ball_model_hash = None
+    if ball_model:
+        with Path(ball_model).open("rb") as handle:
+            ball_model_hash = hashlib.file_digest(handle, "sha256").hexdigest()
     return {"version": VERSION, "match_id": plan["match_id"], "video_id": plan["video_id"],
             "plan_id": plan["plan_id"], "coordinate_frame": "stadium_fixed",
             "coordinate_length_m": length, "coordinate_width_m": width,
@@ -708,7 +733,10 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "sample_fps": sample_fps, "confidence_threshold": confidence, "max_calibration_error_m": max_error_m,
             "detector": "opencv-zoo-yolox-s-coco", "source_sha256": source_hash, "model_sha256": model_hash,
             "inference": {"player": detector.engine.description(),
-                          "pitch": automatic_model.engine.description() if automatic_model else None},
+                          "pitch": automatic_model.engine.description() if automatic_model else None,
+                          "ball": ball_detector.engine.description() if ball_detector else None},
+            "ball_model_sha256": ball_model_hash,
+            "ball_tracking": "dedicated" if ball_detector else "generic",
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
             "tracker": "camera_compensated_motion_iou_kit",
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
@@ -769,6 +797,7 @@ def main(argv=None):
     parser.add_argument("--clip", action="append", dest="clip_ids")
     parser.add_argument("--sample-fps", type=float, default=5)
     parser.add_argument("--confidence", type=float, default=.35)
+    parser.add_argument("--ball-model", type=Path, help="1280 px single-class ball ONNX model")
     parser.add_argument("--max-error-m", type=float, default=2)
     parser.add_argument("--identity-map", type=Path, help="JSON object mapping reviewed track IDs to player/team IDs")
     parser.add_argument("--tracking-jsonl", type=Path, help="Optional normalized export of reviewed players and projected ball")
@@ -781,7 +810,8 @@ def main(argv=None):
             raise ValueError("JSON manifest and JSONL export must be different paths")
         report = run(args.video, read(args.plan), args.model, read(args.calibration),
                      clip_ids=args.clip_ids, sample_fps=args.sample_fps, confidence=args.confidence,
-                     max_error_m=args.max_error_m, identity_map=read(args.identity_map) if args.identity_map else None)
+                     max_error_m=args.max_error_m, identity_map=read(args.identity_map) if args.identity_map else None,
+                     ball_model=args.ball_model)
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(report, handle, ensure_ascii=False, indent=2, allow_nan=False)
             handle.write("\n")

@@ -128,10 +128,12 @@ class FullVideoJob:
 
 
 class ReviewServer(ThreadingHTTPServer):
-    def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None, *, inference_backend="auto"):
+    def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None, *,
+                 inference_backend="auto", ball_model=None):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
         self.pitch_model = pitch_model
+        self.ball_model = ball_model
         self.inference_backend = inference_backend
         self.inference_cache = {}
         self.demo = demo or {}
@@ -266,6 +268,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                            "max_full_video_ms": MAX_VIDEO_MS,
                                            "max_calibration_header": MAX_CALIBRATION_HEADER,
                                            "automatic_calibration": self.server.pitch_model is not None,
+                                           "dedicated_ball_tracking": self.server.ball_model is not None,
                                            "inference_backend": self.server.inference_backend})
         elif path == "/api/progress":
             job = self.requested_job(target)
@@ -375,6 +378,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     calibration = calibration_for_window(calibration, plan, start, MAX_VIDEO_MS if full else end)
                 if self.server.pitch_model is not None:
                     options["pitch_model"] = self.server.pitch_model
+                if self.server.ball_model is not None:
+                    options["ball_model"] = self.server.ball_model
                 options.update(inference_backend=self.server.inference_backend,
                                inference_cache=self.server.inference_cache)
                 report = video_tracking.run(source, plan, self.server.model,
@@ -417,6 +422,7 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--model", required=True, type=Path, help="OpenCV Zoo YOLOX-s ONNX weights")
     parser.add_argument("--pitch-model", type=Path, help="32-landmark, 640 px football pose ONNX model")
+    parser.add_argument("--ball-model", type=Path, help="Single-class, 1280 px football ball ONNX model")
     parser.add_argument("--inference-backend", choices=BACKENDS, default="auto",
                         help="Use Core ML when available, or force one backend")
     parser.add_argument("--demo-video", type=Path)
@@ -427,6 +433,9 @@ def main(argv=None):
     sibling_model = args.model.with_name("football-pitch-detection.onnx")
     if args.pitch_model is None and sibling_model.is_file():
         args.pitch_model = sibling_model
+    sibling_ball = args.model.with_name("football-ball-detection.onnx")
+    if args.ball_model is None and sibling_ball.is_file():
+        args.ball_model = sibling_ball
     demo = {name: value for name in ("video", "tracking", "plan")
             if (value := getattr(args, "demo_" + name)) is not None}
     if demo and not {"video", "tracking"} <= demo.keys():
@@ -435,7 +444,7 @@ def main(argv=None):
         parser.error("--demo-calibration requires the demo video.")
     if not 1 <= args.port <= 65535:
         parser.error("Choose a port between 1 and 65535.")
-    models = (args.model, args.pitch_model) if args.pitch_model else (args.model,)
+    models = tuple(path for path in (args.model, args.pitch_model, args.ball_model) if path is not None)
     if not all(path.is_file() for path in (*models, *demo.values())):
         parser.error("The model and any supplied demo paths must be readable files.")
     if not (WEB_ROOT / STATIC["/video/"]).is_file():
@@ -446,7 +455,7 @@ def main(argv=None):
         if args.demo_calibration:
             video_tracking.calibration_from(calibration, 2)
         with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model,
-                          inference_backend=args.inference_backend) as server:
+                          inference_backend=args.inference_backend, ball_model=args.ball_model) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

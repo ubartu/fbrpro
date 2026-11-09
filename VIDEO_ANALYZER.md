@@ -32,6 +32,24 @@ and put it beside the person detector, or pass `--pitch-model /path/to/football-
 The model card lists the checkpoint under AGPL-3.0. The model runs locally
 and is loaded only when a sampled frame needs an automatic estimate.
 
+For dedicated ball tracking, export the
+[`ball11n.pt` football checkpoint](https://huggingface.co/boxerab/gst-python-ml-football)
+as a 1280 px single-class ONNX detector. The checkpoint is listed under
+AGPL-3.0. In a separate export environment with Ultralytics and ONNX:
+
+```sh
+yolo export model=ball11n.pt format=onnx imgsz=1280 opset=17 simplify=False nms=False
+```
+
+Pass `--ball-model /path/to/ball11n.onnx` to the local app, or name the export
+`football-ball-detection.onnx` beside the person model. The ball detector runs
+locally through the same inference backend. It tracks a single ball across
+sampled frames, resets after camera cuts and leaves gaps where the ball
+cannot be located confidently. Turn on the footage overlay to see its
+yellow ring, or use **Jump to first ball detection**. On the pitch replay,
+the marker is the ball's ground-plane projection. An airborne ball can
+appear away from its true position.
+
 Keep that process open and visit [Video Analysis on localhost](http://127.0.0.1:8765/video/).
 Choose **Match video**, then choose a tracking mode:
 
@@ -82,6 +100,10 @@ calibration when tracking that exact demo file again.
   outline does not establish where the goals are. Upload previews without
   camera calibration can show kit groups and boxes. Add a calibration file
   before running tracking to enable goalkeeper hints and pitch positions.
+- Ball observations carry a track ID and detection confidence. When a
+  dedicated model is used, the report records ball availability per frame.
+  Player identity maps from before dedicated ball tracking must be exported
+  again for runs with that mode enabled.
 
 ## Run a fixture
 

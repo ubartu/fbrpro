@@ -75,6 +75,7 @@
       <p id="phase-now" class="status"></p>
       <button type="button" class="secondary" id="first-sample" hidden>Jump to first tracked frame</button>
       <button type="button" class="secondary" id="first-mapped" hidden>Jump to mapped frame</button>
+      <button type="button" class="secondary" id="first-ball" hidden>Jump to first ball detection</button>
       <details class="align" id="calibration-controls" hidden>
         <summary>Add camera calibration</summary>
         <p class="hint">Optional. Supply a calibration JSON for this video if you have checked the landmarks or want to cover views that automatic calibration cannot map.</p>
@@ -82,7 +83,7 @@
       </details>
       <p id="tracking-status" class="status" aria-live="off">Tracks without a calibrated position stay off the pitch.</p>
       <p id="candidate-status" class="status"></p>
-      <div class="legend"><span><i></i> Confirmed team</span><span><i class="legend-unknown"></i> Unassigned person</span><span><i class="legend-ball"></i> Ball</span>
+      <div class="legend"><span><i></i> Confirmed team</span><span><i class="legend-unknown"></i> Unassigned person</span><span><i class="legend-ball"></i> Ball (ground-plane estimate)</span>
         <span id="legend-kit-a" hidden><i class="legend-kit-a"></i><b id="label-kit-a">Kit group A</b></span>
         <span id="legend-kit-b" hidden><i class="legend-kit-b"></i><b id="label-kit-b">Kit group B</b></span>
         <span id="legend-gk" hidden><i class="legend-gk"></i> Probable goalkeeper</span>

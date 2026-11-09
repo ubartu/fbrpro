@@ -114,7 +114,7 @@ function probableKeeper(o){
   return o.inferred_role==="probable_goalkeeper";
 }
 function teamColour(o){
-  return o.object_type==="ball"?"#fff9e7":teamColours.get(o.team_id)||
+  return o.object_type==="ball"?"#fff180":teamColours.get(o.team_id)||
     (probableKeeper(o)?"#d6baff":inferredTeams.get(o.inferred_team)?.colour||"#e1ae5e");
 }
 function markerLabel(o, name){
@@ -192,8 +192,15 @@ function drawOverlay(frame,polygon){
     const [x,y,right,bottom]=b;
     if(right<=x||bottom<=y)continue;
     const fill=teamColour(o);
-    frag.append(svg("rect",{x,y,width:right-x,height:bottom-y,fill:"none",stroke:fill,"stroke-width":1.4,
-      "vector-effect":"non-scaling-stroke"}));
+    if(o.object_type==="ball"){
+      const centre={cx:(x+right)/2,cy:(y+bottom)/2,r:Math.max((right-x)/2,(bottom-y)/2,tracking.frame_width*.007),
+        fill:"none","vector-effect":"non-scaling-stroke"};
+      frag.append(svg("circle",{...centre,stroke:"#13261e","stroke-width":4}),
+                  svg("circle",{...centre,stroke:fill,"stroke-width":2}));
+    }else{
+      frag.append(svg("rect",{x,y,width:right-x,height:bottom-y,fill:"none",stroke:fill,"stroke-width":1.4,
+        "vector-effect":"non-scaling-stroke"}));
+    }
     const t=svg("text",{x,y:Math.max(10,y-4),fill,stroke:"#15392b","stroke-width":"2",
       "paint-order":"stroke","font-size":tracking.frame_width*.012,"font-weight":"700"});
     t.textContent=markerLabel(o);
@@ -352,7 +359,7 @@ function renderFrame(){
   if(frame.calibration_status==="uncalibrated")message+=" · Pitch calibration unavailable";
   if(frame.calibration_status==="unverified")message+=" · Pitch calibration unverified";
   if(frame.calibration_status==="automatic")message+=" · Automatic pitch estimate";
-  if(!frame.objects.some(o=>o.object_type==="ball"&&o.observed))message+=" · Ball unavailable";
+  message+=hasObservedBall(frame)?" · Ball visible":" · Ball unavailable";
   if(frame.camera_cut_suspected)message+=" · Possible camera cut";
   if(lastMessage!==message)status("tracking-status",message);
   lastMessage=message;
@@ -373,6 +380,7 @@ function configureTimeline(){
   renderClipMarkers(min,max);
   $("first-sample").hidden=!frames?.length||Boolean(getMismatch(tracking,clipPlan));
   $("first-mapped").hidden=!mappedFrame||Boolean(getMismatch(tracking,clipPlan));
+  $("first-ball").hidden=!ballFrame||Boolean(getMismatch(tracking,clipPlan));
   queueFrame();
 }
 function seek(ms){
@@ -389,6 +397,7 @@ function seek(ms){
 $("timeline").addEventListener("input",e=>seek(Number(e.target.value)));
 $("first-sample").onclick=()=>seek(tracking?.frames[0]?.video_time_ms);
 $("first-mapped").onclick=()=>seek(mappedFrame?.video_time_ms);
+$("first-ball").onclick=()=>seek(ballFrame?.video_time_ms);
 $("show-boxes").addEventListener("change",()=>{
   showOverlayControl();lastFrame=undefined;footageLayer.replaceChildren();queueFrame();
 });
@@ -403,7 +412,10 @@ video.addEventListener("emptied",()=>{
   $("video-stage").classList.add("empty");$("video-empty").hidden=false;
   footageLayer.setAttribute("hidden","");footageLayer.replaceChildren();configureTimeline();renderMetrics();
 });
-let mappedFrame;
+let mappedFrame, ballFrame;
+function hasObservedBall(frame){
+  return frame.objects.some(o=>o.object_type==="ball"&&o.observed&&!o.estimated);
+}
 function hasMappedPlayers(frame){
   return ["verified","automatic"].includes(frame.calibration_status)&&frame.objects.some(o=>o.object_type==="player"&&
     o.observed&&o.projection_status===frame.calibration_status&&finite(o.x_m)&&finite(o.y_m));
@@ -411,6 +423,7 @@ function hasMappedPlayers(frame){
 function setupTracking(data,name){
   tracking=data; lastFrame=undefined;lastMessage=undefined;
   mappedFrame=data.frames.find(hasMappedPlayers);
+  ballFrame=data.frames.find(hasObservedBall);
   pitchLayer.replaceChildren();footageLayer.replaceChildren();
   const teams=new Set(), shots=new Map();
   shotByFrame=new WeakMap();
@@ -730,10 +743,11 @@ demoButton.onclick=()=>runFromPage(async signal=>{
     "Real match demo loaded. Use the clip markers or press Play. Pitch positions are available near the start; the ball and player identities are unverified.");
 });
 function showTrackingResult(report,full){
-  let count=0, gaps=0, mapped=0, automatic=0, withheld=false, rejected=false;
+  let count=0, gaps=0, mapped=0, automatic=0, ballCount=0, withheld=false, rejected=false;
   for(const frame of report.frames){
     if(frame.objects.some(o=>o.observed&&o.object_type==="player"))count++;
     if(frame.pitch_boundary_status==="unavailable")gaps++;
+    if(hasObservedBall(frame))ballCount++;
     if(hasMappedPlayers(frame)){
       mapped++;
       if(frame.calibration_status==="automatic")automatic++;
@@ -745,17 +759,19 @@ function showTrackingResult(report,full){
     (automatic?" ("+fmt(automatic)+" automatically estimated).":"."):
     report.automatic_calibration?"Automatic calibration found no usable landmarks in this view.":
     "Pitch replay needs camera calibration. Add calibration for this footage and run again.";
+  const ballSummary=report.ball_tracking==="dedicated"?
+    " Ball detected in "+fmt(ballCount)+" of "+fmt(report.frames.length)+" sampled frames.":"";
   if(full){
     analysisStatus("Full video tracking complete · "+fmt(report.frames.length)+" sampled frames · "+
       fmt(count)+" with on-pitch detections · "+fmt(gaps)+" without a usable pitch outline. Use the replay "+
-      "controls to review coverage. "+pitchSummary);
+      "controls to review coverage. "+pitchSummary+ballSummary);
     return;
   }
-  analysisStatus(count?fmt(count)+" sampled frames with on-pitch detections. "+pitchSummary:
+  analysisStatus((count?fmt(count)+" sampled frames with on-pitch detections. "+pitchSummary:
     withheld?"People were detected in this window, but a pitch outline was unavailable. Try a wide shot with clear field lines.":
     gaps&&gaps===report.frames.length?"The pitch outline was unavailable in this window. Try a wide shot with clear field lines.":
     rejected?"People were detected outside the pitch. Move the playhead to a wide shot with players and try again.":
-    "No people were detected in this window. Move the playhead to a clearer wide shot and try again.");
+    "No people were detected in this window. Move the playhead to a clearer wide shot and try again.")+ballSummary);
 }
 async function trackingHeaders(){
   const file=$("calibration-file").files[0];
@@ -811,7 +827,7 @@ $("video-file").addEventListener("change",e=>{
   $("calibration-file").value="";
   if(previewFile&&previewFile!==activeVideoFile){
     tracking=undefined;previewFile=undefined;lastFrame=undefined;
-    mappedFrame=undefined;
+    mappedFrame=ballFrame=undefined;
     exportedPreview=undefined;
     pitchLayer.replaceChildren();footageLayer.replaceChildren();
     $("track-chip").textContent="Waiting for tracking";

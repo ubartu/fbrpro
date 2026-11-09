@@ -192,4 +192,4 @@ Open `dashboard/local.html` for the built-in dataset selector. The tracked
 
 Open [Video analysis](video/index.html) to review existing footage, pitch
 tracks and movement evidence. See [VIDEO_ANALYZER.md](VIDEO_ANALYZER.md) to
-start the local app and run tracking on a video from the browser.
+start the local app and track either a short clip or a full video from the browser.

@@ -20,6 +20,7 @@ from .video_roles import annotate_video_roles
 
 VERSION = "fbrpro-video-tracking-v1"
 TRACK_ID_SCOPE = "pitch-v1"
+MAX_FULL_VIDEO_MS = 6 * 60 * 60 * 1000
 
 
 def vision():
@@ -495,7 +496,7 @@ def small_frame(cv2, frame):
 
 
 def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=5.0,
-        confidence=.35, max_error_m=2.0, identity_map=None):
+        confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None):
     """Return a tracking manifest and pitch replay observations for selected clips."""
     if not isinstance(plan, dict) or plan.get("version") != PLAN_VERSION:
         raise ValueError("Expected a versioned fbrpro clip plan")
@@ -538,6 +539,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     windows.sort(key=lambda window: window[0])
     if any(a[1] > b[0] for a, b in zip(windows, windows[1:])):
         raise ValueError("Selected clips overlap. Merge overlapping review windows before tracking.")
+    if through_eof and (len(windows) != 1 or windows[0][0] != 0 or
+                        windows[0][3].sync_status != "preview"):
+        raise ValueError("Full video tracking needs one video-only window starting at zero")
     detector = YoloX(model, confidence)
     cap = cv2.VideoCapture(str(video_path))
     try:
@@ -545,31 +549,43 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             raise ValueError("Unable to decode local video file")
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS) if through_eof else None
         frames, summaries = [], []
         observed_ids = set()
         for start, end, clip, segment in windows:
             tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=TRACK_ID_SCOPE)
-            if not cap.set(cv2.CAP_PROP_POS_MSEC, start):
+            if not through_eof and not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
             # Do not invent clock from frame index/FPS when the decoder has no timestamps.
             last_ms, next_sample_ms, previous_img = -1, float(start), None
-            interrupted, missing_frames, sampled = False, 0, 0
+            last_step_ms = None
+            interrupted, missing_frames, sampled, decoded = False, 0, 0, 0
             counters = Counter()
             previous_calibration = invalid_calibration = camera_follow = None
             pending_cut = False
             while True:
                 ok, img = cap.read()
                 if not ok:
-                    interrupted = True
+                    interrupted = not through_eof
+                    if through_eof and last_ms >= 0:
+                        # Frame-count metadata is an estimate for variable-rate
+                        # files. Bound coverage using the decoded presentation clock.
+                        tail_ms = last_step_ms or (1000/fps if finite(fps) and fps > 0 else 1)
+                        end = min(MAX_FULL_VIDEO_MS, max(math.floor(last_ms)+1, round(last_ms+tail_ms)))
                     break
                 stamp = cap.get(cv2.CAP_PROP_POS_MSEC)
                 if not finite(stamp) or stamp < 0 or (last_ms >= 0 and stamp <= last_ms):
                     raise ValueError(f"{clip['id']}: decoder did not supply monotonic frame timestamps")
+                if last_ms >= 0:
+                    last_step_ms = stamp-last_ms
                 last_ms = stamp
-                if stamp >= end:
+                if through_eof and stamp >= MAX_FULL_VIDEO_MS:
+                    raise ValueError("Full video tracking supports footage up to six hours")
+                if not through_eof and stamp >= end:
                     break
                 if stamp < start:
                     continue
+                decoded += 1
                 video_ms = round(stamp)
                 current = small_frame(cv2, img)
                 cut = previous_img is not None and float(np.mean(cv2.absdiff(previous_img, current))) > 44
@@ -597,7 +613,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     continue
                 while next_sample_ms <= stamp:
                     next_sample_ms += 1000/sample_fps
-                period_ms = segment.period_time(video_ms)
+                period_ms = video_ms if through_eof else segment.period_time(video_ms)
                 if pending_cut:
                     tracker.reset()
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
@@ -634,8 +650,11 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "off_pitch_candidates": off_pitch, "objects": rows})
                 pending_cut = False
                 sampled += 1
+                if on_progress:
+                    on_progress(video_ms)
             summaries.append({"clip_id": clip["id"], "sampled_frames": sampled,
                               "video_start_ms": start, "video_end_ms": end,
+                              "decoded_frames": decoded,
                               "empty_frames": missing_frames, "observations": dict(counters),
                               "decode_ended_before_clip_end": interrupted})
         if not frames:

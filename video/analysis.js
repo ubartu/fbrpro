@@ -58,7 +58,8 @@ function showSession(){
   const report=clipPlan||tracking||metrics;
   if(report?.match_id)$("session-summary").textContent="Match "+report.match_id+" · "+[
     report.video_id?"Video "+report.video_id:"",
-    Array.isArray(clipPlan?.clips)?clipPlan.clips.length+" selected clips":"",
+    report.analysis_scope==="full_video"?"Full video sampled":
+      Array.isArray(clipPlan?.clips)?clipPlan.clips.length+" selected clips":"",
     "Files stay on this device",
   ].filter(Boolean).join(" · ");
   else if(report?.match_ids?.length)$("session-summary").textContent=report.match_ids.length+" matches · Files stay on this device";
@@ -536,46 +537,136 @@ document.addEventListener("fbrpro:plan",e=>{
   pitchLayer.replaceChildren();footageLayer.replaceChildren();configureTimeline();renderMetrics();
 });
 
-let localApp=false, sampleAvailable=false, sampleHasPlan=false, uploadLimit, analysisRequest, previewFile;
+let localApp=false, sampleAvailable=false, sampleHasPlan=false, uploadLimit, fullUploadLimit, fullDurationLimit;
+let analysisRequest, analysisJob, previewFile;
 let exportedPreview;
-const analysisButton=$("analyze-video"), demoButton=$("demo-load");
+const analysisButton=$("analyze-video"), fullButton=$("analyze-full"), demoButton=$("demo-load");
+const cancelButton=$("cancel-analysis"), saveTracking=$("export-preview");
+const trackHeaders={"X-FBRPRO-Video":"1"};
 function analysisStatus(message,error=false){
   $("analysis-status").hidden=!message;
   status("analysis-status",message,error);
 }
 function updateAnalysisControls(){
+  const busy=Boolean(analysisRequest);
+  const ready=Boolean(activeVideoFile)&&Number.isFinite(video.duration)&&video.readyState>=1;
   analysisButton.hidden=!localApp;
-  analysisButton.disabled=Boolean(analysisRequest)||!activeVideoFile||!Number.isFinite(video.duration)||video.readyState<1;
+  analysisButton.disabled=busy||!ready;
+  fullButton.hidden=!localApp||!positive(fullUploadLimit);
+  fullButton.disabled=busy||!ready;
   demoButton.hidden=!sampleAvailable;
-  demoButton.disabled=Boolean(analysisRequest);
+  demoButton.disabled=busy;
+  cancelButton.hidden=!analysisJob;
+  cancelButton.disabled=!analysisJob?.registered||analysisJob.cancelling;
   $("local-app-link").hidden=localApp;
-  $("export-preview").hidden=!exportedPreview;
+  saveTracking.hidden=!exportedPreview;
+  saveTracking.disabled=busy;
 }
 async function api(path, options){
   const response=await fetch(path,options);
   if(!response.ok){
     const info=await response.json().catch(()=>null);
-    throw Error(info?.error||"The local video app could not finish this request.");
+    const error=Error(info?.error||"The local video app could not finish this request.");
+    error.status=response.status;
+    throw error;
   }
   return response;
 }
-async function runFromPage(work){
+function jobUrl(action,job){
+  return "/api/"+action+"?"+new URLSearchParams({job:job.id});
+}
+function showAnalysisProgress(job,signal){
+  const display=$("analysis-progress"), started=Date.now();
+  let polling=false, phase="";
+  const stages={uploading:"Receiving video",preparing_result:"Preparing the tracking report",cancelling:"Stopping tracking"};
+  display.hidden=false;
+  function render(){
+    display.textContent=[phase,"Elapsed "+clock(Date.now()-started).slice(0,-2)].filter(Boolean).join(" · ");
+  }
+  async function poll(){
+    render();
+    if(!job||polling)return;
+    polling=true;
+    try{
+      const info=await api(jobUrl("progress",job),{signal}).then(r=>r.json());
+      if(analysisJob!==job||signal.aborted)return;
+      job.registered=true;
+      job.cancelling ||= info.stage==="cancelling";
+      phase=stages[info.stage]||"";
+      if(info.stage==="tracking"&&finite(info.processed_ms)){
+        phase="Processed "+clock(info.processed_ms);
+        if(positive(info.total_ms)&&info.total_ms>=info.processed_ms)
+          phase+=" of about "+clock(info.total_ms);
+      }
+      render();
+      updateAnalysisControls();
+    }catch(err){
+      // A job can be absent while the request starts or its response is sent.
+      if(err.status===404&&analysisJob===job&&job.registered){
+        job.registered=false;
+        updateAnalysisControls();
+      }
+    }finally{polling=false;}
+  }
+  poll();
+  const interval=setInterval(poll,2000);
+  return ()=>{
+    clearInterval(interval);
+    display.hidden=true;
+    display.textContent="";
+  };
+}
+async function runFromPage(work,full=false){
   if(analysisRequest)return;
   const request=new AbortController();
+  const id=full?globalThis.crypto?.randomUUID?.():undefined;
+  const job=id?{id,registered:false,cancelling:false}:undefined;
   analysisRequest=request;
+  analysisJob=job;
   updateAnalysisControls();
-  try{await work(request.signal);}
-  catch(err){if(!request.signal.aborted)analysisStatus(err.message,true);}
+  const stopProgress=showAnalysisProgress(job,request.signal);
+  try{await work(request.signal,job?.id);}
+  catch(err){
+    if(!request.signal.aborted){
+      if(job?.cancelling&&err.status===409)analysisStatus("Full video tracking stopped.");
+      else analysisStatus(err.message,true);
+    }
+  }
   finally{
-    if(analysisRequest===request)analysisRequest=undefined;
+    stopProgress();
+    if(analysisRequest===request){analysisRequest=undefined;analysisJob=undefined;}
     updateAnalysisControls();
+  }
+}
+cancelButton.onclick=async()=>{
+  const job=analysisJob;
+  if(!job?.registered||job.cancelling)return;
+  job.cancelling=true;
+  updateAnalysisControls();
+  try{
+    await api(jobUrl("cancel",job),{method:"POST",headers:trackHeaders});
+    if(analysisJob===job)analysisStatus("Stopping full video tracking…");
+  }catch(err){
+    if(analysisJob!==job)return;
+    job.cancelling=false;
+    if(err.status===404)job.registered=false;
+    else analysisStatus(err.message,true);
+    updateAnalysisControls();
+  }
+};
+function interruptAnalysis(){
+  const job=analysisJob;
+  if(job&&!job.cancelling)api(jobUrl("cancel",job),{method:"POST",headers:trackHeaders}).catch(()=>{});
+  if(analysisRequest){
+    analysisRequest.abort();
+    analysisStatus("");
   }
 }
 function previewReports(plan, report, name){
   const checkedPlan=plan?parsePlan(plan):undefined;
   const checkedReport=parseTracking(report);
   if(getMismatch(checkedPlan,checkedReport))throw Error("The preview video and tracking report do not match.");
-  setupPlan(checkedPlan,checkedPlan?"Video preview":undefined);
+  setupPlan(checkedPlan,checkedPlan?(report.analysis_scope==="full_video"?"Full video":"Video preview"):undefined);
   $("plan-file").value="";
   $("tracking-file").value="";
   setupTracking(checkedReport,name);
@@ -620,39 +711,65 @@ demoButton.onclick=()=>runFromPage(async signal=>{
   seek(first);
   analysisStatus("Real match demo loaded. Use the clip markers or press Play. Pitch positions are available near the start; the ball and player identities are unverified.");
 });
-analysisButton.onclick=()=>runFromPage(async signal=>{
-  const file=activeVideoFile;
-  if(!file||!Number.isFinite(video.duration))return;
-  if(uploadLimit&&file.size>uploadLimit)throw Error("Choose a shorter video file up to "+Math.floor(uploadLimit/1048576)+" MB.");
-  if(tags.length)throw Error("Export your observations and reopen the page before running a tracking preview.");
-  const endOfVideo=Math.floor(video.duration*1000);
-  const start=Math.max(0,Math.min(Math.floor(video.currentTime*1000),endOfVideo-1000));
-  const end=Math.min(endOfVideo,start+8000);
-  video.pause();
-  analysisStatus("Tracking people in "+clock(start)+"–"+clock(end)+". This can take a moment.");
-  const query=new URLSearchParams({start_ms:start,end_ms:end});
-  const report=await api("/api/track?"+query,{method:"POST",signal,headers:{"X-FBRPRO-Video":"1"},body:file})
-    .then(r=>r.json());
-  if(signal.aborted||activeVideoFile!==file)return;
-  previewReports(report.preview_plan,report,"New tracking preview");
-  previewFile=file;
-  exportedPreview=report;
-  seek(report.frames[0]?.video_time_ms??start);
-  const count=report.frames.filter(f=>f.objects.some(o=>o.observed&&o.object_type==="player")).length;
-  const withheld=report.frames.some(f=>f.pitch_unavailable_candidates>0);
-  const noOutline=report.frames.length&&report.frames.every(f=>f.pitch_boundary_status==="unavailable");
-  const rejected=report.frames.some(f=>f.off_pitch_candidates>0);
-  analysisStatus(count?count+" frames contain on-pitch detections. Use the overlay to review them. Pitch positions and goalkeeper hints require camera calibration.":
+function showTrackingResult(report,full){
+  let count=0, gaps=0, withheld=false, rejected=false;
+  for(const frame of report.frames){
+    if(frame.objects.some(o=>o.observed&&o.object_type==="player"))count++;
+    if(frame.pitch_boundary_status==="unavailable")gaps++;
+    withheld ||= frame.pitch_unavailable_candidates>0;
+    rejected ||= frame.off_pitch_candidates>0;
+  }
+  if(full){
+    analysisStatus("Full video tracking complete · "+fmt(report.frames.length)+" sampled frames · "+
+      fmt(count)+" with on-pitch detections · "+fmt(gaps)+" without a usable pitch outline. Use the replay "+
+      "controls to review coverage. Pitch positions and goalkeeper hints require camera calibration.");
+    return;
+  }
+  analysisStatus(count?fmt(count)+" sampled frames with on-pitch detections. Use the overlay to review them. Pitch positions and goalkeeper hints require camera calibration.":
     withheld?"People were detected in this window, but a pitch outline was unavailable. Try a wide shot with clear field lines.":
-    noOutline?"The pitch outline was unavailable in this window. Try a wide shot with clear field lines.":
+    gaps&&gaps===report.frames.length?"The pitch outline was unavailable in this window. Try a wide shot with clear field lines.":
     rejected?"People were detected outside the pitch. Move the playhead to a wide shot with players and try again.":
     "No people were detected in this window. Move the playhead to a clearer wide shot and try again.");
-});
-$("export-preview").onclick=()=>{if(exportedPreview)download("video-tracking-preview.json",exportedPreview);};
+}
+function trackFromPage(full){
+  return runFromPage(async (signal,job)=>{
+    const file=activeVideoFile;
+    if(!file||!Number.isFinite(video.duration))return;
+    const limit=full?fullUploadLimit:uploadLimit;
+    if(positive(limit)&&file.size>limit)
+      throw Error("Choose a video file up to "+fmt(limit/1048576)+" MB.");
+    if(tags.length)throw Error("Export your observations and reopen the page before running tracking.");
+    const endOfVideo=Math.floor(video.duration*1000);
+    if(full&&positive(fullDurationLimit)&&endOfVideo>fullDurationLimit)
+      throw Error("Choose a recording up to "+clock(fullDurationLimit).slice(0,-2)+" long.");
+    const start=full?0:Math.max(0,Math.min(Math.floor(video.currentTime*1000),endOfVideo-1000));
+    const end=Math.min(endOfVideo,start+8000);
+    const query=full?new URLSearchParams({mode:"full"}):new URLSearchParams({start_ms:start,end_ms:end});
+    if(job)query.set("job",job);
+    video.pause();
+    analysisStatus(full?"Tracking the full video from the start. Keep this page open while the local app works.":
+      "Tracking people in "+clock(start)+"–"+clock(end)+". This can take a moment.");
+    const report=await api("/api/track?"+query,{method:"POST",signal,headers:trackHeaders,body:file})
+      .then(r=>r.json());
+    if(signal.aborted||activeVideoFile!==file)return;
+    if(full&&report.analysis_scope!=="full_video")
+      throw Error("The local app returned a short tracking report. Refresh the app and try again.");
+    previewReports(report.preview_plan,report,full?"Full video tracking":"New tracking preview");
+    previewFile=file;
+    exportedPreview=report;
+    seek(report.frames[0]?.video_time_ms??start);
+    showTrackingResult(report,full);
+  },full);
+}
+analysisButton.onclick=()=>trackFromPage(false);
+fullButton.onclick=()=>trackFromPage(true);
+saveTracking.onclick=()=>{
+  if(exportedPreview)download(exportedPreview.analysis_scope==="full_video"?"video-tracking-full.json":"video-tracking-preview.json",exportedPreview);
+};
 for(const event of ["loadedmetadata","emptied","error"])video.addEventListener(event,updateAnalysisControls);
 $("video-file").addEventListener("change",e=>{
   if(activeVideoFile!==e.target.files[0])return;
-  analysisRequest?.abort();
+  interruptAnalysis();
   if(previewFile&&previewFile!==activeVideoFile){
     tracking=undefined;previewFile=undefined;lastFrame=undefined;
     exportedPreview=undefined;
@@ -670,7 +787,7 @@ $("video-file").addEventListener("change",e=>{
   updateAnalysisControls();
 });
 for(const id of ["plan-file","tracking-file"])$(id).addEventListener("change",()=>{
-  analysisRequest?.abort();
+  interruptAnalysis();
   if(id==="tracking-file"){exportedPreview=undefined;updateAnalysisControls();}
 });
 if(/^https?:$/.test(globalThis.location?.protocol||"")){
@@ -678,9 +795,10 @@ if(/^https?:$/.test(globalThis.location?.protocol||"")){
     if(typeof info.demo_available!=="boolean")return;
     localApp=true;sampleAvailable=info.demo_available;sampleHasPlan=info.demo_plan_available===true;
     uploadLimit=info.max_upload_bytes;
-    $("analysis-hint").textContent=sampleAvailable?
-      "Try the real match demo, or open your own video and track a short window from the playhead.":
-      "Open a video and track a short window from the playhead.";
+    fullUploadLimit=info.max_full_upload_bytes;fullDurationLimit=info.max_full_video_ms;
+    $("analysis-hint").textContent=(sampleAvailable?"Try the real match demo, or open your own video. ":"Open a video. ")+
+      (positive(fullUploadLimit)?"Track the next 8 seconds for a quick check, or track the full recording from the start.":
+       "Track a short window from the playhead.");
     updateAnalysisControls();
   }).catch(()=>{});
 }

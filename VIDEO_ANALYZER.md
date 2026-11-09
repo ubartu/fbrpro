@@ -20,12 +20,20 @@ python -m football_normalizer.video_ui --model /path/to/object_detection_yolox_2
 ```
 
 Keep that process open and visit [Video Analysis on localhost](http://127.0.0.1:8765/video/).
-Choose **Match video**, move to the moment you want to inspect, and click
-**Track the next 8 seconds**. A tracking preview accepts videos up to 256 MB,
-draws the pitch outline and on-pitch detections over the footage, and can be
-saved as a report.
-The local app runs on this computer. Preview footage is deleted from the
-app's temporary directory after processing. For pitch projections and
+Choose **Match video**, then choose a tracking mode:
+
+- **Track full video** starts at the beginning and follows the decoder to the
+  end. It samples the footage at 5 frames per second and keeps the same tracker
+  throughout, resetting at suspected camera cuts. Follow the progress on the
+  page and use **Stop tracking** to end a run.
+  The app accepts up to 4 GiB and up to six hours of footage, subject to local
+  temporary storage.
+- **Track the next 8 seconds** samples a short window from the playhead.
+  This mode accepts videos up to 256 MB.
+
+Both modes draw the pitch outline and on-pitch detections over the footage and
+can save a tracking report. The local app processes temporary video files on
+this computer and removes them when the run ends. For pitch projections and
 individual movement rates, follow the aligned fixture workflow below.
 
 Add `--demo-video /path/to/sample.mp4 --demo-tracking /path/to/video-tracking.json

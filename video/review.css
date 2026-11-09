@@ -67,5 +67,6 @@ button:hover:not(:disabled){filter:brightness(1.1)}button.secondary{background:#
 .start-panel h2{margin:.2rem 0;font-size:1.12rem}
 .start-panel p{margin:.25rem 0 0}
 .start-panel .status{flex-basis:100%}
+.start-panel .analysis-progress{border-left:3px solid #63a57b;padding-left:9px;font-variant-numeric:tabular-nums}
 .start-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .start-link{color:#235b45;font-weight:750;font-size:.84rem;text-underline-offset:3px}

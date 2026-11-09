@@ -7,6 +7,7 @@ from threading import Lock
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from uuid import uuid4
 
 from football_normalizer import video_ui
 
@@ -32,7 +33,7 @@ class ReviewServerTests(unittest.TestCase):
         tracking.write_text("{}")
         self.server = SimpleNamespace(
             hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx",
-            demo={"video": video, "tracking": tracking}, job=Lock())
+            demo={"video": video, "tracking": tracking}, job=Lock(), active_job=None)
 
     def call(self, method, path, *, headers=None, body=None):
         fields = {"Host": "127.0.0.1:8765"}
@@ -51,6 +52,8 @@ class ReviewServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(json.loads(body)["demo_available"])
         self.assertFalse(json.loads(body)["demo_plan_available"])
+        self.assertEqual(json.loads(body)["max_full_upload_bytes"], video_ui.MAX_FULL_UPLOAD_BYTES)
+        self.assertEqual(json.loads(body)["max_full_video_ms"], video_ui.MAX_VIDEO_MS)
         self.assertEqual(self.call("GET", "/api/demo/plan")[0], 404)
         status, headers, body = self.call("GET", "/api/demo/video", headers={"Range": "bytes=3-5"})
         self.assertEqual((status, headers["Content-Range"], body), (206, "bytes 3-5/10", b"345"))
@@ -87,6 +90,66 @@ class ReviewServerTests(unittest.TestCase):
         self.assertEqual(report["preview_plan"]["clock_source"], "video_only_unverified")
         self.assertEqual(len(captured), 1)
         self.assertFalse(captured[0].exists())
+
+    def test_full_video_uses_decoded_end_and_reports_progress(self):
+        job = uuid4()
+        progress_url = f"/api/progress?job={job}"
+        self.assertEqual(self.call("GET", progress_url)[0], 404)
+        captured = []
+
+        def track(source, plan, model, calibration, *, through_eof, on_progress, **kwargs):
+            self.assertTrue(through_eof)
+            self.assertEqual(plan["analysis_scope"], "full_video")
+            self.assertEqual(plan["selected_video_ms"], 20_000)
+            self.assertEqual(plan["clips"][0]["video_start_ms"], 0)
+            self.assertEqual(len(plan["clips"]), 1)
+            self.assertEqual(source.read_bytes(), b"video")
+            on_progress(22_000)
+            status, _, body = self.call("GET", progress_url)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body),
+                             {"processed_ms": 22_000, "total_ms": 20_000, "stage": "tracking"})
+            captured.append(source)
+            return {"plan_id": plan["plan_id"], "frames": [], "clips": [{"video_end_ms": 22_100}]}
+
+        with (patch.object(video_ui, "disk_usage", return_value=SimpleNamespace(free=1 << 32)),
+              patch.object(video_ui, "estimate_duration_ms", return_value=20_000),
+              patch.object(video_ui.video_tracking, "run", side_effect=track)):
+            status, _, body = self.call("POST", f"/api/track?mode=full&job={job}",
+                                        headers={"X-FBRPRO-Video": "1"}, body=b"video")
+        self.assertEqual(status, 200)
+        report = json.loads(body)
+        self.assertEqual(report["analysis_scope"], "full_video")
+        plan = report["preview_plan"]
+        self.assertEqual(plan["clock_source"], "video_only_unverified")
+        self.assertEqual(plan["selected_video_ms"], 22_100)
+        for window in (plan["clips"][0], plan["alignment_segments"][0]):
+            self.assertEqual((window["video_end_ms"], window["match_end_ms"]), (22_100, 22_100))
+        self.assertFalse(captured[0].exists())
+        self.assertEqual(self.call("GET", progress_url)[0], 404)
+
+    def test_full_video_rejects_limits_and_honors_cancellation(self):
+        job = uuid4()
+        upload = f"/api/track?mode=full&job={job}"
+        cancel = f"/api/cancel?job={job}"
+        guard = {"X-FBRPRO-Video": "1"}
+        self.assertEqual(self.call("POST", upload, headers={
+            **guard, "Content-Length": str(video_ui.MAX_FULL_UPLOAD_BYTES + 1)})[0], 413)
+        with patch.object(video_ui, "disk_usage", return_value=SimpleNamespace(free=0)):
+            self.assertEqual(self.call("POST", upload, headers=guard, body=b"video")[0], 507)
+
+        def track(*args, on_progress, **kwargs):
+            self.assertEqual(self.call("POST", cancel)[0], 403)
+            self.assertEqual(self.call("POST", cancel, headers=guard)[0], 202)
+            on_progress(1_000)
+
+        with (patch.object(video_ui, "disk_usage", return_value=SimpleNamespace(free=1 << 32)),
+              patch.object(video_ui, "estimate_duration_ms", return_value=None),
+              patch.object(video_ui.video_tracking, "run", side_effect=track)):
+            status, _, body = self.call("POST", upload, headers=guard, body=b"video")
+        self.assertEqual(status, 409)
+        self.assertIn("cancelled", json.loads(body)["error"])
+        self.assertIsNone(self.server.active_job)
 
 
 if __name__ == "__main__":

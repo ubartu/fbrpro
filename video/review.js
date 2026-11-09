@@ -153,9 +153,11 @@ $("plan-file").addEventListener("change",async e=>{
 $("clip").onchange=refresh;$("player").onchange=refresh;
 $("play").onclick=async()=>{
   const c=clip();
-  if(!c||c.video_end_ms>video.duration*1000+1)
+  const full=clipPlan?.analysis_scope==="full_video";
+  if(!c||(!full&&c.video_end_ms>video.duration*1000+1))
     return status("video-status","This clip falls outside the loaded video. Check the file and alignment.",true);
-  video.currentTime=c.video_start_ms/1000;playbackEnd=c.video_end_ms/1000;
+  video.currentTime=c.video_start_ms/1000;
+  playbackEnd=full?Math.min(video.duration,c.video_end_ms/1000):c.video_end_ms/1000;
   try{await video.play();}catch(err){status("video-status","Playback could not start: "+err.message,true);}
 };
 $("save-tag").onclick=()=>{

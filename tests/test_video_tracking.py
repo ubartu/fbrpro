@@ -1,9 +1,13 @@
 import importlib.util
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from football_normalizer.video_tracking import (
     CameraFollow, Detection, Tracker, calibration_from, canonical_rows, identity_from, kit_sample, object_row,
-    pitch_detections,
+    pitch_detections, run,
 )
 
 
@@ -12,6 +16,54 @@ def person(x):
 
 
 class TrackingTests(unittest.TestCase):
+    def test_full_video_reads_past_duration_hint_until_decoder_eof(self):
+        timestamps = [0, 40, 80, 250, 310, 420, 600]
+        reads = iter(enumerate(timestamps))
+        position, timestamp = -1, -1
+        capture = Mock()
+        capture.isOpened.return_value = True
+
+        def read():
+            nonlocal position, timestamp
+            sample = next(reads, None)
+            if sample is None:
+                return False, None
+            position, timestamp = sample
+            return True, None
+
+        capture.read.side_effect = read
+        capture.get.side_effect = lambda key: {
+            "width": 640, "height": 360, "fps": 25, "timestamp": timestamp, "frame": position+1,
+        }[key]
+        cv2 = SimpleNamespace(VideoCapture=lambda _: capture, CAP_PROP_FRAME_WIDTH="width",
+                              CAP_PROP_FRAME_HEIGHT="height", CAP_PROP_FPS="fps",
+                              CAP_PROP_POS_MSEC="timestamp", CAP_PROP_POS_FRAMES="frame",
+                              absdiff=lambda *_: 0)
+        np = SimpleNamespace(mean=lambda x: x)
+        window = {"period": 1, "video_start_ms": 0, "video_end_ms": 300}
+        plan = {"version": "fbrpro-video-plan-v1", "match_id": "m", "video_id": "v", "plan_id": "p",
+                "alignment_segments": [{**window, "id": "s", "kind": "preview",
+                                        "match_start_ms": 0, "match_end_ms": 300}],
+                "clips": [{**window, "id": "c", "segment_id": "s"}]}
+        calibration = {"coordinate_length_m": 105, "coordinate_width_m": 68, "segments": []}
+        progress = []
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.write_bytes(b"stub")
+            with (patch("football_normalizer.video_tracking.vision", return_value=(cv2, np)),
+                  patch("football_normalizer.video_tracking.YoloX"),
+                  patch("football_normalizer.video_tracking.small_frame", return_value=0),
+                  patch("football_normalizer.video_tracking.pitch_detections",
+                        return_value=([], None, "unavailable", 0))):
+                report = run(source, plan, source, calibration, through_eof=True, on_progress=progress.append)
+
+        self.assertEqual(progress, [0, 250, 420, 600])
+        self.assertEqual([f["period_time_ms"] for f in report["frames"]], progress)
+        self.assertEqual(report["clips"][0]["decoded_frames"], len(timestamps))
+        self.assertEqual(report["clips"][0]["video_end_ms"], 780)
+        self.assertFalse(report["clips"][0]["decode_ended_before_clip_end"])
+        capture.set.assert_not_called()
+
     @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                          "optional vision dependencies not installed")
     def test_kit_hint_distinguishes_neutral_and_colored_shirts_from_grass(self):

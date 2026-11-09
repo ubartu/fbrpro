@@ -19,6 +19,13 @@ in your Python environment and obtain the YOLOX-s ONNX model linked below.
 python -m football_normalizer.video_ui --model /path/to/object_detection_yolox_2022nov.onnx
 ```
 
+On a Mac, install the optional acceleration dependency with
+`python -m pip install -e '.[tracking,acceleration]'`. The browser workbench
+uses Core ML through ONNX Runtime when available and falls back to OpenCV
+if a model cannot run through Core ML. It reuses loaded models for later
+runs in the same local server. Pass `--inference-backend opencv` to compare
+against the CPU pipeline. Tracking reports record the backend for each model.
+
 To enable automatic pitch replay, download the 640 px FP32
 [`football-pitch-detection.onnx` landmark export](https://huggingface.co/SzymonKulpinski/football-pitch-detection-onnx)
 and put it beside the person detector, or pass `--pitch-model /path/to/football-pitch-detection.onnx`.

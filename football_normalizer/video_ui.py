@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import UUID, uuid4
 
 from . import video, video_tracking
+from .video_inference import BACKENDS
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent
@@ -127,10 +128,12 @@ class FullVideoJob:
 
 
 class ReviewServer(ThreadingHTTPServer):
-    def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None):
+    def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None, *, inference_backend="auto"):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
         self.pitch_model = pitch_model
+        self.inference_backend = inference_backend
+        self.inference_cache = {}
         self.demo = demo or {}
         self.demo_calibration = demo_calibration
         if demo_calibration is not None:
@@ -262,7 +265,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                            "max_full_upload_bytes": MAX_FULL_UPLOAD_BYTES,
                                            "max_full_video_ms": MAX_VIDEO_MS,
                                            "max_calibration_header": MAX_CALIBRATION_HEADER,
-                                           "automatic_calibration": self.server.pitch_model is not None})
+                                           "automatic_calibration": self.server.pitch_model is not None,
+                                           "inference_backend": self.server.inference_backend})
         elif path == "/api/progress":
             job = self.requested_job(target)
             if job:
@@ -371,6 +375,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     calibration = calibration_for_window(calibration, plan, start, MAX_VIDEO_MS if full else end)
                 if self.server.pitch_model is not None:
                     options["pitch_model"] = self.server.pitch_model
+                options.update(inference_backend=self.server.inference_backend,
+                               inference_cache=self.server.inference_cache)
                 report = video_tracking.run(source, plan, self.server.model,
                                             EMPTY_CALIBRATION if calibration is None else calibration,
                                             confidence=.23, **options)
@@ -411,6 +417,8 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--model", required=True, type=Path, help="OpenCV Zoo YOLOX-s ONNX weights")
     parser.add_argument("--pitch-model", type=Path, help="32-landmark, 640 px football pose ONNX model")
+    parser.add_argument("--inference-backend", choices=BACKENDS, default="auto",
+                        help="Use Core ML when available, or force one backend")
     parser.add_argument("--demo-video", type=Path)
     parser.add_argument("--demo-tracking", type=Path)
     parser.add_argument("--demo-plan", type=Path)
@@ -437,7 +445,8 @@ def main(argv=None):
         calibration = json.loads(args.demo_calibration.read_text()) if args.demo_calibration else None
         if args.demo_calibration:
             video_tracking.calibration_from(calibration, 2)
-        with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model) as server:
+        with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model,
+                          inference_backend=args.inference_backend) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

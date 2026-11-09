@@ -1,5 +1,6 @@
 """Local football landmark inference and conservative ground-plane registration."""
 
+from .video_inference import load_inference
 
 def pitch_landmarks(length, width):
     """Roboflow's 32 landmark indices, using regulation marking dimensions."""
@@ -66,12 +67,9 @@ class PitchModel:
     """Read the 640 px YOLO pose ONNX export with the 32 football landmarks."""
     size = 640
 
-    def __init__(self, cv2, np, path, length, width):
+    def __init__(self, cv2, np, path, length, width, *, inference_backend="opencv", inference_cache=None):
         self.cv2, self.np = cv2, np
-        try:
-            self.net = cv2.dnn.readNetFromONNX(str(path))
-        except cv2.error as exc:
-            raise ValueError("Could not load the automatic pitch landmark model.") from exc
+        self.engine = load_inference(cv2, path, inference_backend, "the pitch landmark model", inference_cache)
         self.field_points = np.asarray(pitch_landmarks(length, width), dtype=np.float32)
 
     def fit(self, frame):
@@ -82,8 +80,7 @@ class PitchModel:
         x, y = (self.size-width)//2, (self.size-height)//2
         image = np.full((self.size, self.size, 3), 114, dtype=np.uint8)
         image[y:y+height, x:x+width] = cv2.resize(frame, (width, height))
-        self.net.setInput(cv2.dnn.blobFromImage(image, 1/255, swapRB=True))
-        output = self.net.forward()
+        output = self.engine.forward(cv2.dnn.blobFromImage(image, 1/255, swapRB=True))
         if output.ndim != 3 or output.shape[:2] != (1, 101):
             raise ValueError("The pitch model must output one class and 32 landmark triples.")
         best = output[0, :, int(output[0, 4].argmax())]

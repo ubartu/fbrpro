@@ -16,6 +16,7 @@ from pathlib import Path
 
 from .video import VERSION as PLAN_VERSION, segments_from
 from .video_auto_calibration import PitchModel
+from .video_inference import load_inference
 from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
 from .video_roles import annotate_video_roles
@@ -52,16 +53,11 @@ class Detection:
 
 class YoloX:
     """Run the 640x640 OpenCV Zoo YOLOX model (person and sports ball)."""
-    def __init__(self, model, confidence):
+    def __init__(self, model, confidence, *, inference_backend="opencv", inference_cache=None):
         cv2, np = vision()
         self.cv2, self.np = cv2, np
         self.confidence = confidence
-        try:
-            self.net = cv2.dnn.readNetFromONNX(str(model))
-        except cv2.error as exc:
-            raise ValueError("Could not load the OpenCV Zoo YOLOX ONNX model") from exc
-        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+        self.engine = load_inference(cv2, model, inference_backend, "the YOLOX detector", inference_cache)
         grids, strides = [], []
         for step in (8, 16, 32):
             y, x = np.indices((640//step, 640//step))
@@ -79,8 +75,7 @@ class YoloX:
         canvas[:resized.shape[0], :resized.shape[1]] = resized
         # Zoo demo uses RGB, then HWC -> CHW with raw 0..255 floats.
         blob = cv2.dnn.blobFromImage(canvas, scalefactor=1.0, swapRB=True)
-        self.net.setInput(blob)
-        pred = np.asarray(self.net.forward()).reshape(-1, 85)
+        pred = np.asarray(self.engine.forward(blob)).reshape(-1, 85)
         if len(pred) != len(self.grid):
             raise ValueError("Expected the OpenCV Zoo 640x640 YOLOX COCO ONNX export")
         classes = np.argmax(pred[:, 5:], axis=1)
@@ -517,7 +512,7 @@ def small_frame(cv2, frame):
 
 def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=5.0,
         confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None,
-        pitch_model=None):
+        pitch_model=None, inference_backend="opencv", inference_cache=None):
     """Return a tracking manifest and pitch replay observations for selected clips."""
     if not isinstance(plan, dict) or plan.get("version") != PLAN_VERSION:
         raise ValueError("Expected a versioned fbrpro clip plan")
@@ -563,7 +558,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if through_eof and (len(windows) != 1 or windows[0][0] != 0 or
                         windows[0][3].sync_status != "preview"):
         raise ValueError("Full video tracking needs one video-only window starting at zero")
-    detector = YoloX(model, confidence)
+    detector = YoloX(model, confidence, inference_backend=inference_backend, inference_cache=inference_cache)
     automatic_model = None
     cap = cv2.VideoCapture(str(video_path))
     try:
@@ -642,7 +637,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     camera_motion.reset()
                 if pitch_model is not None and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
-                        automatic_model = PitchModel(cv2, np, pitch_model, length, width)
+                        automatic_model = PitchModel(cv2, np, pitch_model, length, width,
+                                                     inference_backend=inference_backend,
+                                                     inference_cache=inference_cache)
                     fit = automatic_model.fit(img)
                     if fit is not None:
                         matrix, rms, check = fit
@@ -710,6 +707,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "frame_width": frame_width, "frame_height": frame_height,
             "sample_fps": sample_fps, "confidence_threshold": confidence, "max_calibration_error_m": max_error_m,
             "detector": "opencv-zoo-yolox-s-coco", "source_sha256": source_hash, "model_sha256": model_hash,
+            "inference": {"player": detector.engine.description(),
+                          "pitch": automatic_model.engine.description() if automatic_model else None},
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
             "tracker": "camera_compensated_motion_iou_kit",
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",

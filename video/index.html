@@ -74,10 +74,10 @@
       <div id="clip-markers" class="clip-markers" role="group" aria-label="Selected clip markers" hidden></div>
       <p id="phase-now" class="status"></p>
       <button type="button" class="secondary" id="first-sample" hidden>Jump to first tracked frame</button>
-      <button type="button" class="secondary" id="first-mapped" hidden>Jump to calibrated frame</button>
+      <button type="button" class="secondary" id="first-mapped" hidden>Jump to mapped frame</button>
       <details class="align" id="calibration-controls" hidden>
         <summary>Add camera calibration</summary>
-        <p class="hint">For your own footage, choose the calibration JSON for this video, then run tracking again. Use full video tracking if the camera needs to follow landmarks from the start of a shot.</p>
+        <p class="hint">Optional. Supply a calibration JSON for this video if you have checked the landmarks or want to cover views that automatic calibration cannot map.</p>
         <label>Calibration JSON <input type="file" id="calibration-file" accept="application/json,.json"></label>
       </details>
       <p id="tracking-status" class="status" aria-live="off">Tracks without a calibrated position stay off the pitch.</p>

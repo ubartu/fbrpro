@@ -19,6 +19,12 @@ in your Python environment and obtain the YOLOX-s ONNX model linked below.
 python -m football_normalizer.video_ui --model /path/to/object_detection_yolox_2022nov.onnx
 ```
 
+To enable automatic pitch replay, download the 640 px FP32
+[`football-pitch-detection.onnx` landmark export](https://huggingface.co/SzymonKulpinski/football-pitch-detection-onnx)
+and put it beside the person detector, or pass `--pitch-model /path/to/football-pitch-detection.onnx`.
+The model card lists the checkpoint under AGPL-3.0. The model runs locally
+and is loaded only when a sampled frame needs an automatic estimate.
+
 Keep that process open and visit [Video Analysis on localhost](http://127.0.0.1:8765/video/).
 Choose **Match video**, then choose a tracking mode:
 
@@ -32,14 +38,17 @@ Choose **Match video**, then choose a tracking mode:
   This mode accepts videos up to 256 MB.
 
 Both modes draw the pitch outline and on-pitch detections over the footage and
-can save a tracking report. To add pitch replay for your own video, open
-**Add camera calibration** in the replay panel and choose a [calibration JSON
-for that exact recording](#calibration-format) before running tracking. **Jump
-to calibrated frame** appears when verified player positions are available.
-For a moving shot, use full video tracking so the tracker can read its
-calibration reference frame. The local app removes temporary video files when
-the run ends. For individual movement rates, follow the aligned fixture
-workflow below.
+can save a tracking report. With the landmark model available, the app
+estimates positions using the visible pitch markings. It checks the spread
+and agreement of the landmarks and leaves the pitch empty where the view
+does not support a mapping. **Jump to mapped frame** opens a usable frame.
+Estimates use reference pitch dimensions by default. For reviewed positions,
+choose a [calibration JSON for that exact recording](#calibration-format) in
+**Add camera calibration** before tracking. A verified manual mapping takes
+precedence. Use full video tracking for a moving manually calibrated shot so
+the tracker can read its reference frame. The local app removes temporary
+video files when the run ends. For individual movement rates, follow the
+aligned fixture workflow below.
 
 Add `--demo-video /path/to/sample.mp4 --demo-tracking /path/to/video-tracking.json
 --demo-plan /path/to/clip-plan.json` to enable **Load real match demo**.

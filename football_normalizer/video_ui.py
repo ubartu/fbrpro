@@ -127,9 +127,10 @@ class FullVideoJob:
 
 
 class ReviewServer(ThreadingHTTPServer):
-    def __init__(self, port, model, demo=None, demo_calibration=None):
+    def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
+        self.pitch_model = pitch_model
         self.demo = demo or {}
         self.demo_calibration = demo_calibration
         if demo_calibration is not None:
@@ -260,7 +261,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                            "max_upload_bytes": MAX_UPLOAD_BYTES, "max_window_ms": MAX_WINDOW_MS,
                                            "max_full_upload_bytes": MAX_FULL_UPLOAD_BYTES,
                                            "max_full_video_ms": MAX_VIDEO_MS,
-                                           "max_calibration_header": MAX_CALIBRATION_HEADER})
+                                           "max_calibration_header": MAX_CALIBRATION_HEADER,
+                                           "automatic_calibration": self.server.pitch_model is not None})
         elif path == "/api/progress":
             job = self.requested_job(target)
             if job:
@@ -367,6 +369,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     if full:
                         plan["alignment_segments"][0].update(video_end_ms=MAX_VIDEO_MS, match_end_ms=MAX_VIDEO_MS)
                     calibration = calibration_for_window(calibration, plan, start, MAX_VIDEO_MS if full else end)
+                if self.server.pitch_model is not None:
+                    options["pitch_model"] = self.server.pitch_model
                 report = video_tracking.run(source, plan, self.server.model,
                                             EMPTY_CALIBRATION if calibration is None else calibration,
                                             confidence=.23, **options)
@@ -406,11 +410,15 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--model", required=True, type=Path, help="OpenCV Zoo YOLOX-s ONNX weights")
+    parser.add_argument("--pitch-model", type=Path, help="32-landmark, 640 px football pose ONNX model")
     parser.add_argument("--demo-video", type=Path)
     parser.add_argument("--demo-tracking", type=Path)
     parser.add_argument("--demo-plan", type=Path)
     parser.add_argument("--demo-calibration", type=Path, help="Calibration for the exact demo video")
     args = parser.parse_args(argv)
+    sibling_model = args.model.with_name("football-pitch-detection.onnx")
+    if args.pitch_model is None and sibling_model.is_file():
+        args.pitch_model = sibling_model
     demo = {name: value for name in ("video", "tracking", "plan")
             if (value := getattr(args, "demo_" + name)) is not None}
     if demo and not {"video", "tracking"} <= demo.keys():
@@ -419,7 +427,8 @@ def main(argv=None):
         parser.error("--demo-calibration requires the demo video.")
     if not 1 <= args.port <= 65535:
         parser.error("Choose a port between 1 and 65535.")
-    if not all(path.is_file() for path in (args.model, *demo.values())):
+    models = (args.model, args.pitch_model) if args.pitch_model else (args.model,)
+    if not all(path.is_file() for path in (*models, *demo.values())):
         parser.error("The model and any supplied demo paths must be readable files.")
     if not (WEB_ROOT / STATIC["/video/"]).is_file():
         parser.error("Run the workbench from a project checkout with the video and dashboard pages.")
@@ -428,7 +437,7 @@ def main(argv=None):
         calibration = json.loads(args.demo_calibration.read_text()) if args.demo_calibration else None
         if args.demo_calibration:
             video_tracking.calibration_from(calibration, 2)
-        with ReviewServer(args.port, args.model, demo, calibration) as server:
+        with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

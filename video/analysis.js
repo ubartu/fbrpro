@@ -158,7 +158,7 @@ function summarizeCandidates(frame,polygon){
   if(validMs(frame.pitch_unavailable_candidates))parts.push(fmt(frame.pitch_unavailable_candidates)+" withheld for missing outline");
   status("candidate-status",parts.join(" · "));
   const boundary=polygon?(pitchBoundaryVerified(frame)?"Pitch outline · Verified camera calibration":
-    "Pitch outline · Estimated from footage"):
+    frame.pitch_boundary?.source==="automatic_landmarks"?"Pitch outline · Automatic landmark estimate":"Pitch outline · Estimated from footage"):
     "pitch_boundary_status" in frame||"pitch_boundary" in frame?"Pitch outline unavailable in this frame.":"";
   status("boundary-status",boundary);
 }
@@ -340,7 +340,9 @@ function renderFrame(){
   else if(frame.pitch_boundary_status==="unavailable")
     showPitchMessage("Pitch outline unavailable","Try a wider view with clear field lines.");
   else if(mappedFrame)
-    showPitchMessage("No verified positions at this moment","Use Jump to calibrated frame to see positions on the pitch.");
+    showPitchMessage("No mapped positions at this moment","Use Jump to mapped frame to see positions on the pitch.");
+  else if(tracking.automatic_calibration)
+    showPitchMessage("Automatic mapping unavailable","Use footage with clear field markings or add a reviewed calibration file.");
   else if(uncalibrated||frame.calibration_status==="uncalibrated")
     showPitchMessage("Pitch positions need calibration",hasVideo?
       "Review detections over the footage. Camera calibration is required to plot their positions.":
@@ -349,6 +351,7 @@ function renderFrame(){
   message=[plotted+" plotted",unidentified+" unidentified people",missing+" not visible",uncalibrated+" without a pitch position"].join(" · ");
   if(frame.calibration_status==="uncalibrated")message+=" · Pitch calibration unavailable";
   if(frame.calibration_status==="unverified")message+=" · Pitch calibration unverified";
+  if(frame.calibration_status==="automatic")message+=" · Automatic pitch estimate";
   if(!frame.objects.some(o=>o.object_type==="ball"&&o.observed))message+=" · Ball unavailable";
   if(frame.camera_cut_suspected)message+=" · Possible camera cut";
   if(lastMessage!==message)status("tracking-status",message);
@@ -402,8 +405,8 @@ video.addEventListener("emptied",()=>{
 });
 let mappedFrame;
 function hasMappedPlayers(frame){
-  return frame.calibration_status==="verified"&&frame.objects.some(o=>o.object_type==="player"&&
-    o.observed&&o.projection_status==="verified"&&finite(o.x_m)&&finite(o.y_m));
+  return ["verified","automatic"].includes(frame.calibration_status)&&frame.objects.some(o=>o.object_type==="player"&&
+    o.observed&&o.projection_status===frame.calibration_status&&finite(o.x_m)&&finite(o.y_m));
 }
 function setupTracking(data,name){
   tracking=data; lastFrame=undefined;lastMessage=undefined;
@@ -713,7 +716,7 @@ demoButton.onclick=()=>runFromPage(async signal=>{
     api("/api/demo/tracking",{signal}).then(r=>r.json())
   ]);
   if(signal.aborted)return;
-  const first=report.frames.find(f=>f.calibration_status==="verified")?.video_time_ms??report.frames[0]?.video_time_ms??0;
+  const first=report.frames.find(hasMappedPlayers)?.video_time_ms??report.frames[0]?.video_time_ms??0;
   const file=new File([blob],"DFL sample.mp4",{type:blob.type||"video/mp4"});
   await loadPreviewVideo(file,signal);
   if(signal.aborted)return;
@@ -722,19 +725,26 @@ demoButton.onclick=()=>runFromPage(async signal=>{
   previewFile=file;
   exportedPreview=report;
   seek(first);
-  analysisStatus("Real match demo loaded. Use the clip markers or press Play. Pitch positions are available near the start; the ball and player identities are unverified.");
+  analysisStatus(report.automatic_calibration?
+    "Real match demo loaded. Press Play or scrub the timeline to see the automatically estimated pitch positions.":
+    "Real match demo loaded. Use the clip markers or press Play. Pitch positions are available near the start; the ball and player identities are unverified.");
 });
 function showTrackingResult(report,full){
-  let count=0, gaps=0, mapped=0, withheld=false, rejected=false;
+  let count=0, gaps=0, mapped=0, automatic=0, withheld=false, rejected=false;
   for(const frame of report.frames){
     if(frame.objects.some(o=>o.observed&&o.object_type==="player"))count++;
     if(frame.pitch_boundary_status==="unavailable")gaps++;
-    if(hasMappedPlayers(frame))mapped++;
+    if(hasMappedPlayers(frame)){
+      mapped++;
+      if(frame.calibration_status==="automatic")automatic++;
+    }
     withheld ||= frame.pitch_unavailable_candidates>0;
     rejected ||= frame.off_pitch_candidates>0;
   }
-  const pitchSummary=mapped?fmt(mapped)+" sampled frames have verified pitch positions.":
-    "Pitch replay needs verified camera calibration. Add calibration for this footage and run again.";
+  const pitchSummary=mapped?fmt(mapped)+" sampled frames have pitch positions"+
+    (automatic?" ("+fmt(automatic)+" automatically estimated).":"."):
+    report.automatic_calibration?"Automatic calibration found no usable landmarks in this view.":
+    "Pitch replay needs camera calibration. Add calibration for this footage and run again.";
   if(full){
     analysisStatus("Full video tracking complete · "+fmt(report.frames.length)+" sampled frames · "+
       fmt(count)+" with on-pitch detections · "+fmt(gaps)+" without a usable pitch outline. Use the replay "+
@@ -829,7 +839,8 @@ if(/^https?:$/.test(globalThis.location?.protocol||"")){
     calibrationLimit=info.max_calibration_header;
     $("analysis-hint").textContent=(sampleAvailable?"Try the real match demo, or open your own video. ":"Open a video. ")+
       (positive(fullUploadLimit)?"Track the next 8 seconds for a quick check, or track the full recording from the start.":
-       "Track a short window from the playhead.");
+       "Track a short window from the playhead.")+
+      (info.automatic_calibration?" Pitch replay maps visible field markings automatically.":"");
     updateAnalysisControls();
   }).catch(()=>{});
 }

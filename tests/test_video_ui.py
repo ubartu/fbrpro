@@ -34,7 +34,7 @@ class ReviewServerTests(unittest.TestCase):
         tracking = Path(scratch) / "tracking.json"
         tracking.write_text("{}")
         self.server = SimpleNamespace(
-            hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx",
+            hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx", pitch_model=None,
             demo={"video": video, "tracking": tracking}, demo_calibration=None, job=Lock(), active_job=None)
 
     def call(self, method, path, *, headers=None, body=None):

@@ -15,6 +15,7 @@ import math
 from pathlib import Path
 
 from .video import VERSION as PLAN_VERSION, segments_from
+from .video_auto_calibration import PitchModel
 from .video_pitch import detect_pitch
 from .video_roles import annotate_video_roles
 
@@ -445,17 +446,20 @@ def pitch_detections(cv2, np, frame, detector, calibration, length, width):
     """Gate person boxes by ground contact before track association."""
     auto = detect_pitch(cv2, np, frame)
     verified = calibration is not None and calibration.status == "verified"
-    exact = calibrated_boundary(cv2, np, frame.shape, calibration, length, width) if verified else None
+    automatic = calibration is not None and calibration.status == "automatic"
+    mapped = verified or automatic
+    exact = calibrated_boundary(cv2, np, frame.shape, calibration, length, width) if mapped else None
     polygon = exact or (auto.polygon_xy if auto else None)
-    boundary = {"polygon_xy": polygon, "source": "verified_calibration" if exact else auto.source} if polygon else None
-    status = "verified" if verified else "estimated" if auto else "unavailable"
+    source = ("verified_calibration" if verified else "automatic_landmarks") if exact else auto.source if auto else None
+    boundary = {"polygon_xy": polygon, "source": source} if polygon else None
+    status = "verified" if verified else "estimated" if auto or exact else "unavailable"
     if status == "unavailable":
         return [], boundary, status, 0
     rejected = 0
 
     def accepts_person(point):
         nonlocal rejected
-        if verified:
+        if mapped:
             xy = calibration.project(point)
             inside = xy is not None and 0 <= xy[0] <= length and 0 <= xy[1] <= width
         else:
@@ -479,7 +483,7 @@ def object_row(track, calibration, length, width, identities):
             xy = calibration.project(d.anchor())
             if not xy or not (0 <= xy[0] <= length and 0 <= xy[1] <= width):
                 xy, status = None, "off_pitch"
-            elif d.object_type == "ball":
+            elif d.object_type == "ball" and status == "verified":
                 status = "ball_ground_assumed"
     return {"track_id": track.id, "object_type": d.object_type,
             "player_id": player, "team_id": team, "observed": not track.missing,
@@ -496,7 +500,8 @@ def small_frame(cv2, frame):
 
 
 def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=5.0,
-        confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None):
+        confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None,
+        pitch_model=None):
     """Return a tracking manifest and pitch replay observations for selected clips."""
     if not isinstance(plan, dict) or plan.get("version") != PLAN_VERSION:
         raise ValueError("Expected a versioned fbrpro clip plan")
@@ -543,6 +548,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                         windows[0][3].sync_status != "preview"):
         raise ValueError("Full video tracking needs one video-only window starting at zero")
     detector = YoloX(model, confidence)
+    automatic_model = None
     cap = cv2.VideoCapture(str(video_path))
     try:
         if not cap.isOpened():
@@ -616,6 +622,14 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 period_ms = video_ms if through_eof else segment.period_time(video_ms)
                 if pending_cut:
                     tracker.reset()
+                if pitch_model is not None and (cal is None or cal.status != "verified"):
+                    if automatic_model is None:
+                        automatic_model = PitchModel(cv2, np, pitch_model, length, width)
+                    fit = automatic_model.fit(img)
+                    if fit is not None:
+                        matrix, rms, check = fit
+                        cal = Calibration(segment.id, None, None, matrix, "automatic", rms, check)
+                        counters["automatically_calibrated_frames"] += 1
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
                     cv2, np, img, detector, cal, length, width)
                 counters["off_pitch_candidates"] += off_pitch
@@ -679,6 +693,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
             "kit_color_policy": "review hint from two agreeing torso samples",
+            "automatic_calibration": bool(pitch_model),
             "role_inference": roles,
             "sync": [{"segment_id": s.id, "status": s.sync_status,
                       "check_max_ms": s.check_max_ms} for s in aligned.values()],

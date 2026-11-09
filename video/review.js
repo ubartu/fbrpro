@@ -136,7 +136,7 @@ function setupPlan(data,name){
   for(const p of data?.players||[])option($("player"),p.id,p.name);
   $("clip").disabled=!data?.clips.length;$("player").disabled=!data?.players.length;
   const selected=data?.selected_video_ms??data?.clips.reduce((sum,c)=>sum+c.video_end_ms-c.video_start_ms,0);
-  status("plan-status",data?data.clips.length+" clips · "+secs(selected)+" selected · video ID: "+data.video_id:
+  status("plan-status",data?data.clips.length+(data.clips.length===1?" clip · ":" clips · ")+secs(selected)+" selected · video ID: "+data.video_id:
     "Open a clip plan to jump to selected moments in the video.");
   refresh();
   document.dispatchEvent(new CustomEvent("fbrpro:plan",{detail:{name}}));

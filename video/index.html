@@ -20,13 +20,25 @@
     <div class="intro-copy"><span class="eyebrow"><i></i> VIDEO INTELLIGENCE</span><h1>Match analysis</h1><p>Connect the footage to the pitch. See the movements behind the numbers, then review the moments that matter.</p></div>
     <nav class="steps" aria-label="Workflow"><a href="#session-files"><b>01</b> Load files</a><i></i><a href="#footage-title"><b>02</b> Explore</a><i></i><a href="#clips-title"><b>03</b> Review</a></nav>
   </section>
+  <section class="panel start-panel" aria-label="Start video analysis">
+    <div><span class="eyebrow">QUICK START</span><h2>Track players from a clip</h2>
+      <p class="hint" id="analysis-hint">Open the local app to run automatic tracking or try the real match sample. You can also open existing reports below.</p></div>
+    <div class="start-actions">
+      <a class="start-link" id="local-app-link" href="http://127.0.0.1:8765/video/">Open local app</a>
+      <button id="demo-load" type="button" hidden>Load real match demo</button>
+      <button id="analyze-video" class="secondary" type="button" hidden disabled>Track the next 8 seconds</button>
+      <button id="export-preview" class="secondary" type="button" hidden>Save tracking report</button>
+    </div>
+    <p id="analysis-status" class="status" role="status" hidden></p>
+    <noscript><p class="status">This workspace needs JavaScript. Open the running local app in your browser to use the controls.</p></noscript>
+  </section>
   <div class="inputs" id="session-files" aria-label="Session files">
     <label class="upload"><input id="video-file" type="file" accept="video/*"><span class="upload-icon">▶</span><span><strong>Match video</strong><small id="video-name">Choose a video</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
     <label class="upload"><input id="plan-file" type="file" accept="application/json,.json"><span class="upload-icon">≡</span><span><strong>Clip plan</strong><small id="plan-name">Optional · JSON</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
     <label class="upload"><input id="tracking-file" type="file" accept="application/json,.json"><span class="upload-icon">⌖</span><span><strong>Player tracking</strong><small id="tracking-name">Choose a JSON report</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
     <label class="upload"><input id="metrics-file" type="file" accept="application/json,.json"><span class="upload-icon">↗</span><span><strong>Movement metrics</strong><small id="metrics-name">Optional · JSON</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
   </div>
-  <p class="session-hint" id="session-summary">Files stay on this device. Start with a video or open a tracking report to replay positions without footage.</p>
+  <p class="session-hint" id="session-summary">Files stay on this device. Open a video and track a short window, or load an existing report below.</p>
   <p id="session-status" class="session-status" role="status" hidden></p>
   <div class="workspace">
     <section class="panel footage-panel" aria-labelledby="footage-title">

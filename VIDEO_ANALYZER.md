@@ -1,13 +1,35 @@
 # FBRPRO video analyzer
 
-Open [Video analysis](video/index.html) in a browser. Load a video and its
-tracking report to watch the footage and pitch replay together. Tracking boxes
-can be turned on over the footage. The timeline highlights sampled windows.
+Open the running local app for automatic tracking, or open
+[Video analysis](video/index.html) to review existing files directly. Load a
+video and its tracking report to watch the footage and pitch replay together.
+Tracking boxes can be turned on over the footage. The timeline highlights sampled windows.
 Add a clip plan to review individual opportunities, or add a movement report
 to jump from a measure to the footage and see why other episodes were excluded.
 The [Midfield Lab](dashboard/index.html) can open the same movement report next
 to an existing event-based report. Video evidence and role comparisons use
 separate results.
+
+## Start the local app
+
+From the project checkout, install `python -m pip install -e '.[tracking]'`
+in your Python environment and obtain the YOLOX-s ONNX model linked below.
+
+```sh
+python -m football_normalizer.video_ui --model /path/to/object_detection_yolox_2022nov.onnx
+```
+
+Keep that process open and visit [Video Analysis on localhost](http://127.0.0.1:8765/video/).
+Choose **Match video**, move to the moment you want to inspect, and click
+**Track the next 8 seconds**. A tracking preview accepts videos up to 256 MB,
+draws person and any detected ball boxes, and can be saved as a report.
+The local app runs on this computer. Preview footage is deleted from the
+app's temporary directory after processing. For pitch projections and
+individual movement rates, follow the aligned fixture workflow below.
+
+Add `--demo-video /path/to/sample.mp4 --demo-tracking /path/to/video-tracking.json
+--demo-plan /path/to/clip-plan.json` to enable **Load real match demo**.
+The demo loads the matching footage, tracking and clip markers together.
 
 ## Run a fixture
 

@@ -190,7 +190,6 @@ Open `dashboard/local.html` for the built-in dataset selector. The tracked
 
 ## Video analyzer
 
-Open [Video analysis](video/index.html) to review footage, pitch tracks and
-movement evidence. See [VIDEO_ANALYZER.md](VIDEO_ANALYZER.md) for selected-clip
-tracking, movement measures, the Midfield Lab integration, and real-video
-pilot limitations.
+Open [Video analysis](video/index.html) to review existing footage, pitch
+tracks and movement evidence. See [VIDEO_ANALYZER.md](VIDEO_ANALYZER.md) to
+start the local app and run tracking on a video from the browser.

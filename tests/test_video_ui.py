@@ -1,0 +1,93 @@
+from http.client import parse_headers
+from io import BytesIO
+import json
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from threading import Lock
+from types import SimpleNamespace
+import unittest
+from unittest.mock import patch
+
+from football_normalizer import video_ui
+
+
+class InMemoryHandler(video_ui.ReviewHandler):
+    def setup(self):
+        self.rfile = BytesIO(self.request)
+        self.wfile = BytesIO()
+
+    def finish(self):
+        pass
+
+    def log_message(self, *args):
+        pass
+
+
+class ReviewServerTests(unittest.TestCase):
+    def setUp(self):
+        scratch = self.enterContext(TemporaryDirectory())
+        video = Path(scratch) / "sample.mp4"
+        video.write_bytes(b"0123456789")
+        tracking = Path(scratch) / "tracking.json"
+        tracking.write_text("{}")
+        self.server = SimpleNamespace(
+            hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx",
+            demo={"video": video, "tracking": tracking}, job=Lock())
+
+    def call(self, method, path, *, headers=None, body=None):
+        fields = {"Host": "127.0.0.1:8765"}
+        if body is not None:
+            fields["Content-Length"] = str(len(body))
+        fields.update(headers or {})
+        request = f"{method} {path} HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in fields.items())
+        handler = InMemoryHandler(request.encode("ascii") + b"\r\n" + (body or b""),
+                                  ("127.0.0.1", 12345), self.server)
+        header, response = handler.wfile.getvalue().split(b"\r\n\r\n", 1)
+        status, raw_fields = header.split(b"\r\n", 1)
+        return int(status.split()[1]), parse_headers(BytesIO(raw_fields + b"\r\n\r\n")), response
+
+    def test_demo_discovery_ranges_and_routes_are_restricted(self):
+        status, _, body = self.call("GET", "/api/status")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["demo_available"])
+        self.assertFalse(json.loads(body)["demo_plan_available"])
+        self.assertEqual(self.call("GET", "/api/demo/plan")[0], 404)
+        status, headers, body = self.call("GET", "/api/demo/video", headers={"Range": "bytes=3-5"})
+        self.assertEqual((status, headers["Content-Range"], body), (206, "bytes 3-5/10", b"345"))
+        self.assertEqual(self.call("GET", "/api/demo/video", headers={"Range": "bytes=30-"})[0], 416)
+        self.assertEqual(self.call("GET", "/football_normalizer/video_ui.py")[0], 404)
+        self.assertEqual(self.call("GET", "/api/status", headers={"Host": "example.invalid"})[0], 403)
+        self.assertEqual(self.call("GET", "/api/status", headers={"Origin": "https://example.invalid"})[0], 403)
+
+    def test_upload_is_bounded_and_runs_without_fixture_evidence(self):
+        path = "/api/track?start_ms=1000&end_ms=2500"
+        guard = {"X-FBRPRO-Video": "1"}
+        self.assertEqual(self.call("POST", path, body=b"x")[0], 403)
+        self.assertEqual(self.call("POST", "/api/track?start_ms=0&end_ms=16000", headers=guard, body=b"x")[0], 400)
+        self.assertEqual(self.call("POST", path, headers={
+            **guard, "Content-Length": str(video_ui.MAX_UPLOAD_BYTES + 1)})[0], 413)
+
+        captured = []
+
+        def track(source, plan, model, calibration, **kwargs):
+            self.assertEqual(source.read_bytes(), b"raw video bytes")
+            self.assertEqual(calibration["segments"], [])
+            self.assertEqual(plan["alignment_segments"][0]["kind"], "preview")
+            self.assertEqual(plan["clips"][0]["opportunities"], [])
+            self.assertEqual(plan["players"], [])
+            captured.append(source)
+            return {"plan_id": plan["plan_id"], "frames": []}
+
+        with patch.object(video_ui.video_tracking, "run", side_effect=track):
+            status, _, body = self.call("POST", path, headers=guard, body=b"raw video bytes")
+        self.assertEqual(status, 200)
+        report = json.loads(body)
+        self.assertEqual(report["analysis_scope"], "video_preview")
+        self.assertEqual(report["preview_plan"]["plan_id"], report["plan_id"])
+        self.assertEqual(report["preview_plan"]["clock_source"], "video_only_unverified")
+        self.assertEqual(len(captured), 1)
+        self.assertFalse(captured[0].exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

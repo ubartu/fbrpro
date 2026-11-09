@@ -186,7 +186,7 @@ function renderPhase(ms){
     c=>c.video_start_ms<=ms&&ms<=c.video_end_ms);
   const phases=active?.opportunities.filter(o=>o.video_start_ms<=ms&&ms<=o.video_end_ms)
     .map(o=>phaseName(o.reason));
-  const message=active?[active.id,"Half "+active.period,...new Set(phases)].join(" · "):
+  const message=active?[active.id,isPreviewClip(clipPlan,active)?"Video time":"Half "+active.period,...new Set(phases)].join(" · "):
     $("clip-markers").hidden?"":"Selected clips are marked on the timeline.";
   const phase=$("phase-now");
   if(phase.textContent!==message)phase.textContent=message;
@@ -308,7 +308,7 @@ video.addEventListener("timeupdate",queueFrame);
 video.addEventListener("seeked",queueFrame);
 video.addEventListener("loadedmetadata",()=>{
   $("video-stage").classList.remove("empty");$("video-empty").hidden=true;
-  $("video-name").textContent=$("video-file").files[0]?.name||"Local video";
+  $("video-name").textContent=activeVideoFile?.name||$("video-file").files[0]?.name||"Local video";
   showOverlayControl();lastFrame=undefined;configureTimeline();
 });
 video.addEventListener("emptied",()=>{
@@ -442,7 +442,147 @@ $("metrics-file").addEventListener("change",async e=>{
 });
 video.addEventListener("loadedmetadata",renderMetrics);
 document.addEventListener("fbrpro:plan",e=>{
-  $("plan-name").textContent=e.detail?.name||"Clip plan loaded";
+  $("plan-name").textContent=e.detail?.name||"Optional · JSON";
   showSession();showOverlayControl();lastFrame=undefined;setupIdentityRoster();
   pitchLayer.replaceChildren();footageLayer.replaceChildren();configureTimeline();renderMetrics();
 });
+
+let localApp=false, sampleAvailable=false, sampleHasPlan=false, uploadLimit, analysisRequest, previewFile;
+let exportedPreview;
+const analysisButton=$("analyze-video"), demoButton=$("demo-load");
+function analysisStatus(message,error=false){
+  $("analysis-status").hidden=!message;
+  status("analysis-status",message,error);
+}
+function updateAnalysisControls(){
+  analysisButton.hidden=!localApp;
+  analysisButton.disabled=Boolean(analysisRequest)||!activeVideoFile||!Number.isFinite(video.duration)||video.readyState<1;
+  demoButton.hidden=!sampleAvailable;
+  demoButton.disabled=Boolean(analysisRequest);
+  $("local-app-link").hidden=localApp;
+  $("export-preview").hidden=!exportedPreview;
+}
+async function api(path, options){
+  const response=await fetch(path,options);
+  if(!response.ok){
+    const info=await response.json().catch(()=>null);
+    throw Error(info?.error||"The local video app could not finish this request.");
+  }
+  return response;
+}
+async function runFromPage(work){
+  if(analysisRequest)return;
+  const request=new AbortController();
+  analysisRequest=request;
+  updateAnalysisControls();
+  try{await work(request.signal);}
+  catch(err){if(!request.signal.aborted)analysisStatus(err.message,true);}
+  finally{
+    if(analysisRequest===request)analysisRequest=undefined;
+    updateAnalysisControls();
+  }
+}
+function previewReports(plan, report, name){
+  const checkedPlan=plan?parsePlan(plan):undefined;
+  const checkedReport=parseTracking(report);
+  if(getMismatch(checkedPlan,checkedReport))throw Error("The preview video and tracking report do not match.");
+  setupPlan(checkedPlan,checkedPlan?"Video preview":undefined);
+  $("plan-file").value="";
+  $("tracking-file").value="";
+  setupTracking(checkedReport,name);
+  $("show-boxes").checked=true;
+  showOverlayControl();
+  lastFrame=undefined;
+  queueFrame();
+}
+function loadPreviewVideo(file,signal){
+  return new Promise((resolve,reject)=>{
+    if(signal.aborted)return resolve();
+    function done(err){
+      video.removeEventListener("loadedmetadata",loaded);
+      video.removeEventListener("error",failed);
+      signal.removeEventListener("abort",cancelled);
+      if(err)reject(err);else resolve();
+    }
+    const loaded=()=>done(), failed=()=>done(Error("The browser could not decode the sample video."));
+    const cancelled=()=>done();
+    video.addEventListener("loadedmetadata",loaded);
+    video.addEventListener("error",failed);
+    signal.addEventListener("abort",cancelled,{once:true});
+    if(!setVideo(file))done(Error("Export your observations before opening another video."));
+  });
+}
+demoButton.onclick=()=>runFromPage(async signal=>{
+  if(tags.length)throw Error("Export your observations and reopen the page before loading the demo.");
+  analysisStatus("Loading the real match video and its tracking results…");
+  const [blob,plan,report]=await Promise.all([
+    api("/api/demo/video",{signal}).then(r=>r.blob()),
+    sampleHasPlan?api("/api/demo/plan",{signal}).then(r=>r.json()):undefined,
+    api("/api/demo/tracking",{signal}).then(r=>r.json())
+  ]);
+  if(signal.aborted)return;
+  const first=report.frames.find(f=>f.calibration_status==="verified")?.video_time_ms??report.frames[0]?.video_time_ms??0;
+  const file=new File([blob],"DFL sample.mp4",{type:blob.type||"video/mp4"});
+  await loadPreviewVideo(file,signal);
+  if(signal.aborted)return;
+  previewReports(plan,report,"DFL sample tracking");
+  previewFile=file;
+  exportedPreview=report;
+  seek(first);
+  analysisStatus("Real match demo loaded. Use the clip markers or press Play. Pitch positions are available near the start; the ball and player identities are unverified.");
+});
+analysisButton.onclick=()=>runFromPage(async signal=>{
+  const file=activeVideoFile;
+  if(!file||!Number.isFinite(video.duration))return;
+  if(uploadLimit&&file.size>uploadLimit)throw Error("Choose a shorter video file up to "+Math.floor(uploadLimit/1048576)+" MB.");
+  if(tags.length)throw Error("Export your observations and reopen the page before running a tracking preview.");
+  const endOfVideo=Math.floor(video.duration*1000);
+  const start=Math.max(0,Math.min(Math.floor(video.currentTime*1000),endOfVideo-1000));
+  const end=Math.min(endOfVideo,start+8000);
+  video.pause();
+  analysisStatus("Tracking people in "+clock(start)+"–"+clock(end)+". This can take a moment.");
+  const query=new URLSearchParams({start_ms:start,end_ms:end});
+  const report=await api("/api/track?"+query,{method:"POST",signal,headers:{"X-FBRPRO-Video":"1"},body:file})
+    .then(r=>r.json());
+  if(signal.aborted||activeVideoFile!==file)return;
+  previewReports(report.preview_plan,report,"New tracking preview");
+  previewFile=file;
+  exportedPreview=report;
+  seek(report.frames[0]?.video_time_ms??start);
+  const count=report.frames.filter(f=>f.objects.some(o=>o.observed&&o.object_type==="player")).length;
+  analysisStatus(count?count+" frames contain person detections. Use the tracking boxes to review them. Pitch positions require camera calibration.":
+    "No people were detected in this window. Move the playhead to a clearer wide shot and try again.");
+});
+$("export-preview").onclick=()=>{if(exportedPreview)download("video-tracking-preview.json",exportedPreview);};
+for(const event of ["loadedmetadata","emptied","error"])video.addEventListener(event,updateAnalysisControls);
+$("video-file").addEventListener("change",e=>{
+  if(activeVideoFile!==e.target.files[0])return;
+  analysisRequest?.abort();
+  if(previewFile&&previewFile!==activeVideoFile){
+    tracking=undefined;previewFile=undefined;lastFrame=undefined;
+    exportedPreview=undefined;
+    pitchLayer.replaceChildren();footageLayer.replaceChildren();
+    $("track-chip").textContent="Waiting for tracking";
+    $("tracking-name").textContent="Choose a JSON report";
+    $("pitch-empty").hidden=false;
+    $("show-boxes").checked=false;
+    setupPlan(undefined);
+  }
+  analysisStatus("");
+  updateAnalysisControls();
+});
+for(const id of ["plan-file","tracking-file"])$(id).addEventListener("change",()=>{
+  analysisRequest?.abort();
+  if(id==="tracking-file"){exportedPreview=undefined;updateAnalysisControls();}
+});
+if(/^https?:$/.test(globalThis.location?.protocol||"")){
+  api("/api/status").then(r=>r.json()).then(info=>{
+    if(typeof info.demo_available!=="boolean")return;
+    localApp=true;sampleAvailable=info.demo_available;sampleHasPlan=info.demo_plan_available===true;
+    uploadLimit=info.max_upload_bytes;
+    $("analysis-hint").textContent=sampleAvailable?
+      "Try the real match demo, or open your own video and track a short window from the playhead.":
+      "Open a video and track a short window from the playhead.";
+    updateAnalysisControls();
+  }).catch(()=>{});
+}

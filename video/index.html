@@ -48,8 +48,9 @@
         <svg id="video-tracks" aria-hidden="true" hidden></svg>
         <div class="stage-empty" id="video-empty"><div class="video-icon" aria-hidden="true">▷</div><strong>No video loaded</strong><span>Choose a local match video above.</span></div>
       </div>
-      <label class="overlay-control" id="overlay-control" hidden><input id="show-boxes" type="checkbox"> Show tracking boxes</label>
+      <label class="overlay-control" id="overlay-control" hidden><input id="show-boxes" type="checkbox"> Show tracking boxes and pitch outline</label>
       <p id="video-status" class="status" role="status">No footage has been opened.</p>
+      <p id="boundary-status" class="status"></p>
     </section>
     <section class="panel pitch-panel" aria-labelledby="pitch-title">
       <div class="panel-head"><div><span class="eyebrow">02 / TRACKING</span><h2 id="pitch-title">Pitch replay</h2></div><span id="track-chip" class="chip">Waiting for tracking</span></div>
@@ -64,14 +65,20 @@
           </g>
           <g id="pitch-objects"></g>
         </svg>
-        <div class="pitch-empty" id="pitch-empty"><strong>Player positions appear here</strong><span>Open a tracking report to start.</span></div>
+        <div class="pitch-empty" id="pitch-empty"><strong id="pitch-message">Player positions appear here</strong><span id="pitch-detail">Open a tracking report to start.</span></div>
       </div>
       <div class="timeline"><label for="timeline">Replay time</label><input id="timeline" type="range" min="0" max="0" value="0" step="1" disabled><output id="replay-time">00:00.0</output></div>
       <div id="clip-markers" class="clip-markers" role="group" aria-label="Selected clip markers" hidden></div>
       <p id="phase-now" class="status"></p>
       <button type="button" class="secondary" id="first-sample" hidden>Jump to first tracked frame</button>
       <p id="tracking-status" class="status" aria-live="off">Tracks without a calibrated position stay off the pitch.</p>
-      <div class="legend"><span><i class="legend-known"></i> Team identified</span><span><i class="legend-unknown"></i> Team unknown</span><span><i class="legend-ball"></i> Ball</span></div>
+      <p id="candidate-status" class="status"></p>
+      <div class="legend"><span><i></i> Confirmed team</span><span><i class="legend-unknown"></i> Unassigned person</span><span><i class="legend-ball"></i> Ball</span>
+        <span id="legend-kit-a" hidden><i class="legend-kit-a"></i><b id="label-kit-a">Kit group A</b></span>
+        <span id="legend-kit-b" hidden><i class="legend-kit-b"></i><b id="label-kit-b">Kit group B</b></span>
+        <span id="legend-gk" hidden><i class="legend-gk"></i> Probable goalkeeper</span>
+      </div>
+      <p id="inference-hint" class="status" hidden>Kit groups and goalkeeper markers are estimates for this camera shot. Confirm player identities separately.</p>
       <details id="identity-panel" class="align" hidden>
         <summary>Confirm player identities</summary>
         <p class="hint">Pause on a clear frame and turn on tracking boxes. Confirm each identity from the footage and roster before exporting.</p>

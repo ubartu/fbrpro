@@ -3,6 +3,7 @@ import unittest
 
 from football_normalizer.video_tracking import (
     CameraFollow, Detection, Tracker, calibration_from, canonical_rows, identity_from, kit_sample, object_row,
+    pitch_detections,
 )
 
 
@@ -13,7 +14,7 @@ def person(x):
 class TrackingTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                          "optional vision dependencies not installed")
-    def test_kit_hint_ignores_grass_mixed_colors_and_dark_uniforms(self):
+    def test_kit_hint_distinguishes_neutral_and_colored_shirts_from_grass(self):
         import cv2
         import numpy as np
 
@@ -27,7 +28,33 @@ class TrackingTests(unittest.TestCase):
         frame[24:42, 30:40] = (235, 20, 105)
         self.assertIsNone(kit_sample(cv2, np, frame, box))
         frame[24:42, 30:50] = (25, 25, 25)
-        self.assertIsNone(kit_sample(cv2, np, frame, box))
+        self.assertEqual(kit_sample(cv2, np, frame, box), "black")
+        frame[24:42, 30:50] = (220, 220, 220)
+        self.assertEqual(kit_sample(cv2, np, frame, box), "white")
+
+    @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
+                         "optional vision dependencies not installed")
+    def test_verified_pitch_gate_filters_off_field_people_before_tracking(self):
+        import cv2
+        import numpy as np
+
+        frame = np.zeros((160, 230, 3), dtype=np.uint8)
+        row = {"segment_id": "s1", "image_points": [[20,20],[125,20],[125,88],[20,88]],
+               "pitch_points": [[0,0],[105,0],[105,68],[0,68]],
+               "check_image_points": [[72,53]], "check_pitch_points": [[52,33]]}
+        length, width, maps = calibration_from(
+            {"coordinate_length_m": 105, "coordinate_width_m": 68, "segments": [row]}, 2)
+
+        class Detector:
+            def detect(self, frame, region, *, accepts_person):
+                return [d for d in (person(26), person(175)) if accepts_person(d.anchor())]
+
+        rows, boundary, status, rejected = pitch_detections(cv2, np, frame, Detector(), maps[0], length, width)
+        self.assertEqual((status, rejected), ("verified", 1))
+        self.assertEqual(boundary["source"], "verified_calibration")
+        self.assertEqual([d.box for d in rows], [person(26).box])
+        self.assertEqual(pitch_detections(cv2, np, frame, None, None, length, width),
+                         ([], None, "unavailable", 0))
 
     def test_one_to_one_association_preserves_tracks_and_reports_missing(self):
         tracker = Tracker("clip-1", 450)

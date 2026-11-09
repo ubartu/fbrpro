@@ -5,6 +5,8 @@ const pitchLayer = $("pitch-objects");
 const footageLayer = $("video-tracks");
 let tracking, metrics;
 let teamColours = new Map();
+let inferredTeams = new Map();
+let shotByFrame = new WeakMap(), inferenceShot;
 let reviewedIdentities = new Map();
 let replayMs = 0;
 let metricPlayer = 0;
@@ -107,8 +109,64 @@ function nearestFrame(frames,ms){
   if(!after)return before;
   return ms-before.video_time_ms<=after.video_time_ms-ms?before:after;
 }
+function probableKeeper(o){
+  return o.inferred_role==="probable_goalkeeper";
+}
 function teamColour(o){
-  return o.object_type==="ball"?"#fff9e7":teamColours.get(o.team_id)||"#e1ae5e";
+  return o.object_type==="ball"?"#fff9e7":teamColours.get(o.team_id)||
+    (probableKeeper(o)?"#d6baff":inferredTeams.get(o.inferred_team)?.colour||"#e1ae5e");
+}
+function markerLabel(o, name){
+  if(o.object_type==="ball")return "Ball";
+  const group=inferredTeams.get(o.inferred_team);
+  const labels=[name||o.player_id||o.track_id];
+  if(group&&!o.team_id)labels.push(group.letter);
+  if(probableKeeper(o))labels.push("GK?");
+  return labels.join(" · ");
+}
+function configureInferenceLegend(shot){
+  if(inferenceShot===shot)return;
+  inferenceShot=shot;
+  const entries=[...(shot?.groups||[])].sort().slice(0,2);
+  inferredTeams=new Map(entries.map((key,i)=>{
+    const letter=i===0?"A":"B", colour=i===0?"#7ad8f6":"#ff99bd";
+    const name=key.slice(4).replaceAll("_"," ");
+    return [key,{letter,colour,name}];
+  }));
+  for(const [i,letter] of ["a","b"].entries()){
+    const group=inferredTeams.get(entries[i]);
+    $("legend-kit-"+letter).hidden=!group;
+    if(group)$("label-kit-"+letter).textContent="Kit "+group.letter+" · "+group.name;
+  }
+  $("legend-gk").hidden=!shot?.keeper;
+  $("inference-hint").hidden=!entries.length&&!shot?.keeper;
+}
+function pitchPolygon(frame){
+  const points=frame.pitch_boundary?.polygon_xy;
+  if(frame.pitch_boundary_status==="unavailable"||!Array.isArray(points)||points.length<3||
+     !points.every(p=>Array.isArray(p)&&p.length===2&&p.every(finite)))return;
+  return points;
+}
+function pitchBoundaryVerified(frame){
+  return frame.pitch_boundary?.source==="verified_calibration";
+}
+function summarizeCandidates(frame,polygon){
+  const parts=[];
+  if(validMs(frame.person_candidates))parts.push(fmt(frame.person_candidates)+" person candidate"+(frame.person_candidates===1?"":"s"));
+  if(validMs(frame.off_pitch_candidates))parts.push(fmt(frame.off_pitch_candidates)+" rejected outside pitch");
+  if(validMs(frame.pitch_unavailable_candidates))parts.push(fmt(frame.pitch_unavailable_candidates)+" withheld for missing outline");
+  status("candidate-status",parts.join(" · "));
+  const boundary=polygon?(pitchBoundaryVerified(frame)?"Pitch outline · Verified camera calibration":
+    "Pitch outline · Estimated from footage"):
+    "pitch_boundary_status" in frame||"pitch_boundary" in frame?"Pitch outline unavailable in this frame.":"";
+  status("boundary-status",boundary);
+}
+function showPitchMessage(title,detail){
+  $("pitch-empty").hidden=!title;
+  if(title){
+    if($("pitch-message").textContent!==title)$("pitch-message").textContent=title;
+    if($("pitch-detail").textContent!==detail)$("pitch-detail").textContent=detail;
+  }
 }
 function showOverlayControl(){
   const fits=positive(tracking?.frame_width)&&positive(tracking?.frame_height)&&
@@ -118,9 +176,15 @@ function showOverlayControl(){
   footageLayer.toggleAttribute("hidden",$("overlay-control").hidden||!$("show-boxes").checked);
   if(fits)footageLayer.setAttribute("viewBox","0 0 "+tracking.frame_width+" "+tracking.frame_height);
 }
-function drawBoxes(frame){
+function drawOverlay(frame,polygon){
   if(footageLayer.hasAttribute("hidden"))return;
   const frag=document.createDocumentFragment();
+  if(polygon){
+    const verified=pitchBoundaryVerified(frame);
+    frag.append(svg("polygon",{points:polygon.map(p=>p.join(",")).join(" "),fill:"#75e2bc",
+      "fill-opacity":".08",stroke:"#75e2bc","stroke-width":2,"stroke-dasharray":verified?"none":"6 4",
+      "vector-effect":"non-scaling-stroke"}));
+  }
   for(const o of frame.objects){
     const b=o.bbox_xyxy;
     if(!o.observed||o.estimated||o.visibility==="missing"||!Array.isArray(b)||b.length!==4||!b.every(finite))continue;
@@ -131,7 +195,7 @@ function drawBoxes(frame){
       "vector-effect":"non-scaling-stroke"}));
     const t=svg("text",{x,y:Math.max(10,y-4),fill,stroke:"#15392b","stroke-width":"2",
       "paint-order":"stroke","font-size":tracking.frame_width*.012,"font-weight":"700"});
-    t.textContent=o.object_type==="ball"?"Ball":o.player_id||o.track_id;
+    t.textContent=markerLabel(o);
     frag.append(t);
   }
   footageLayer.replaceChildren(frag);
@@ -145,8 +209,9 @@ function showIdentityTracks(frame){
   select.replaceChildren();
   const observed=frame?.objects.filter(o=>o.observed&&!o.estimated&&o.object_type==="player")||[];
   for(const o of observed){
-    const hint=o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
-    option(select,o.track_id,o.track_id+hint);
+    const group=inferredTeams.get(o.inferred_team);
+    const hint=group?" · "+group.name+" kit group":o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
+    option(select,o.track_id,markerLabel(o,o.track_id)+hint);
   }
   select.value=observed.some(o=>o.track_id===prior)?prior:observed[0]?.track_id||"";
   $("identity-save").disabled=!select.value;
@@ -231,15 +296,22 @@ function renderFrame(){
   if(!usable){
     if(lastFrame!==undefined){pitchLayer.replaceChildren();footageLayer.replaceChildren();}
     lastFrame=undefined;
+    configureInferenceLegend();
     if(!$("identity-panel").hidden)showIdentityTracks();
+    showPitchMessage(mismatch?"Session files differ":"No tracking sample",message);
+    status("candidate-status","");
+    status("boundary-status","");
     if(lastMessage!==message)status("tracking-status",message);
     lastMessage=message;
     return;
   }
   if(frame===lastFrame)return;
   lastFrame=frame;
+  configureInferenceLegend(shotByFrame.get(frame));
   if(!$("identity-panel").hidden)showIdentityTracks(frame);
-  drawBoxes(frame);
+  const polygon=pitchPolygon(frame);
+  drawOverlay(frame,polygon);
+  summarizeCandidates(frame,polygon);
   const frag=document.createDocumentFragment();
   let plotted=0, missing=0, uncalibrated=0, unidentified=0;
   const length=tracking.coordinate_length_m,width=tracking.coordinate_width_m;
@@ -252,17 +324,25 @@ function renderFrame(){
     const ball=o.object_type==="ball";
     const group=svg("g",{});
     const circle=svg("circle",{cx:x,cy:y,r:ball?1.05:1.52,fill:teamColour(o),stroke:"#103226","stroke-width":".34"});
-    const title=svg("title",{});title.textContent=(o.player_id||o.track_id)+(o.team_id?" · "+o.team_id:" · team unknown");
+    const title=svg("title",{});title.textContent=markerLabel(o)+(o.team_id?" · "+o.team_id:"");
     circle.append(title);group.append(circle);
     if(!ball){
       const t=svg("text",{x,y:y-2.0,"text-anchor":"middle",fill:"#f6fff6","font-size":"1.8","font-weight":"650","paint-order":"stroke",stroke:"#15392b","stroke-width":".32"});
       const name=clipPlan?.players?.find(p=>p.id===o.player_id)?.name;
-      t.textContent=name||o.player_id||o.track_id;
+      t.textContent=markerLabel(o,name);
       group.append(t);
     }
     frag.append(group);
   }
   pitchLayer.replaceChildren(frag);
+  if(plotted)showPitchMessage("");
+  else if(frame.pitch_boundary_status==="unavailable")
+    showPitchMessage("Pitch outline unavailable","Try a wider view with clear field lines.");
+  else if(uncalibrated||frame.calibration_status==="uncalibrated")
+    showPitchMessage("Pitch positions need calibration",hasVideo?
+      "Review detections over the footage. Camera calibration is required to plot their positions.":
+      "Open the matching footage to see detections. Camera calibration is required to plot their positions.");
+  else showPitchMessage("No pitch positions in this frame","Use the replay controls to try another sample.");
   message=[plotted+" plotted",unidentified+" unidentified people",missing+" not visible",uncalibrated+" without a pitch position"].join(" · ");
   if(frame.calibration_status==="uncalibrated")message+=" · Pitch calibration unavailable";
   if(frame.calibration_status==="unverified")message+=" · Pitch calibration unverified";
@@ -318,20 +398,29 @@ video.addEventListener("emptied",()=>{
 function setupTracking(data,name){
   tracking=data; lastFrame=undefined;lastMessage=undefined;
   pitchLayer.replaceChildren();footageLayer.replaceChildren();
-  const teams=new Set();
+  const teams=new Set(), shots=new Map();
+  shotByFrame=new WeakMap();
   reviewedIdentities=new Map();
-  for(const f of data.frames)for(const o of f.objects)if(o.team_id&&o.object_type!=="ball"){
-    teams.add(o.team_id);
-    reviewedIdentities.set(o.track_id,o.player_id?{player_id:o.player_id,team_id:o.team_id}:{team_id:o.team_id});
+  for(const f of data.frames){
+    let shot=shots.get(f.clip_id);
+    if(!shot||f.camera_cut_suspected){
+      shot={groups:new Set(),keeper:false};
+      shots.set(f.clip_id,shot);
+    }
+    shotByFrame.set(f,shot);
+    for(const o of f.objects)if(o.object_type==="player"){
+      if(typeof o.inferred_team==="string"&&/^kit:[a-z_]+$/.test(o.inferred_team))shot.groups.add(o.inferred_team);
+      shot.keeper ||= probableKeeper(o);
+      if(o.team_id){
+        teams.add(o.team_id);
+        reviewedIdentities.set(o.track_id,o.player_id?{player_id:o.player_id,team_id:o.team_id}:{team_id:o.team_id});
+      }
+    }
   }
   teamColours=new Map([...teams].sort().map((team,i)=>[team,palette[i%palette.length]]));
   replayMs=data.frames[0]?.video_time_ms??0;
   $("tracking-name").textContent=name;
   $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames":"No frames";
-  $("pitch-empty").hidden=data.frames.length>0;
-  if(!data.frames.length){
-    $("pitch-empty").replaceChildren(node("strong",null,"No tracking frames"),node("span",null,"This report did not contain any frame samples."));
-  }
   showSession();showOverlayControl();setupIdentityRoster();configureTimeline();renderMetrics();
 }
 $("tracking-file").addEventListener("change",async e=>{
@@ -550,7 +639,13 @@ analysisButton.onclick=()=>runFromPage(async signal=>{
   exportedPreview=report;
   seek(report.frames[0]?.video_time_ms??start);
   const count=report.frames.filter(f=>f.objects.some(o=>o.observed&&o.object_type==="player")).length;
-  analysisStatus(count?count+" frames contain person detections. Use the tracking boxes to review them. Pitch positions require camera calibration.":
+  const withheld=report.frames.some(f=>f.pitch_unavailable_candidates>0);
+  const noOutline=report.frames.length&&report.frames.every(f=>f.pitch_boundary_status==="unavailable");
+  const rejected=report.frames.some(f=>f.off_pitch_candidates>0);
+  analysisStatus(count?count+" frames contain on-pitch detections. Use the overlay to review them. Pitch positions and goalkeeper hints require camera calibration.":
+    withheld?"People were detected in this window, but a pitch outline was unavailable. Try a wide shot with clear field lines.":
+    noOutline?"The pitch outline was unavailable in this window. Try a wide shot with clear field lines.":
+    rejected?"People were detected outside the pitch. Move the playhead to a wide shot with players and try again.":
     "No people were detected in this window. Move the playhead to a clearer wide shot and try again.");
 });
 $("export-preview").onclick=()=>{if(exportedPreview)download("video-tracking-preview.json",exportedPreview);};
@@ -564,7 +659,10 @@ $("video-file").addEventListener("change",e=>{
     pitchLayer.replaceChildren();footageLayer.replaceChildren();
     $("track-chip").textContent="Waiting for tracking";
     $("tracking-name").textContent="Choose a JSON report";
-    $("pitch-empty").hidden=false;
+    showPitchMessage("Player positions appear here","Open a tracking report to start.");
+    configureInferenceLegend();
+    status("candidate-status","");
+    status("boundary-status","");
     $("show-boxes").checked=false;
     setupPlan(undefined);
   }

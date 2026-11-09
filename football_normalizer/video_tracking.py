@@ -15,8 +15,11 @@ import math
 from pathlib import Path
 
 from .video import VERSION as PLAN_VERSION, segments_from
+from .video_pitch import detect_pitch
+from .video_roles import annotate_video_roles
 
 VERSION = "fbrpro-video-tracking-v1"
+TRACK_ID_SCOPE = "pitch-v1"
 
 
 def vision():
@@ -37,6 +40,7 @@ class Detection:
     object_type: str
     confidence: float
     box: tuple[float, float, float, float]
+    kit_color: str | None = None
 
     def anchor(self):
         x1, y1, x2, y2 = self.box
@@ -63,7 +67,7 @@ class YoloX:
         self.grid = np.concatenate(grids)
         self.stride = np.concatenate(strides)
 
-    def detect(self, frame):
+    def _detect(self, frame, *, people_only=False):
         cv2, np = self.cv2, self.np
         h, w = frame.shape[:2]
         ratio = min(640/w, 640/h)
@@ -79,7 +83,8 @@ class YoloX:
         classes = np.argmax(pred[:, 5:], axis=1)
         conf = pred[:, 4] * pred[np.arange(len(pred)), classes+5]
         result = []
-        for index, object_type in ((0, "player"), (32, "ball")):
+        classes_to_keep = ((0, "player"),) if people_only else ((0, "player"), (32, "ball"))
+        for index, object_type in classes_to_keep:
             mask = (classes == index) & np.isfinite(conf) & (conf >= self.confidence)
             centers = (pred[mask, :2] + self.grid[mask]) * self.stride[mask] / ratio
             sizes = np.exp(np.clip(pred[mask, 2:4], -15, 15)) * self.stride[mask] / ratio
@@ -98,6 +103,42 @@ class YoloX:
         players = [d for d in result if d.object_type == "player"]
         balls = [d for d in result if d.object_type == "ball"]
         return players + ([max(balls, key=lambda d: d.confidence)] if balls else [])
+
+    def detect(self, frame, region=None, *, accepts_person=None):
+        """Combine the full image and overlapping, tighter views of a wide pitch."""
+        def allowed(detection):
+            return (detection.object_type != "player" or accepts_person is None
+                    or accepts_person(detection.anchor()))
+
+        detections = [d for d in self._detect(frame) if allowed(d)]
+        if not region:
+            return detections
+        height, width = frame.shape[:2]
+        xs, ys = zip(*region)
+        padding = round(min(width, height)*.08)
+        left, right = max(0, int(min(xs))-padding), min(width, int(max(xs))+padding)
+        top, bottom = max(0, int(min(ys))-padding), min(height, int(max(ys))+padding)
+        span = right-left
+        tile_width = round(span*.61)
+        if span < 640 or max(tile_width, bottom-top) >= .88*max(width, height) or bottom <= top:
+            return detections
+        people = [d for d in detections if d.object_type == "player"]
+        balls = [d for d in detections if d.object_type == "ball"]
+        for x in (left, right-tile_width):
+            tile = frame[top:bottom, x:x+tile_width]
+            for d in self._detect(tile, people_only=True):
+                x1, y1, x2, y2 = d.box
+                if (x > 0 and x1 < 4) or (x+tile_width < width and x2 > tile_width-5):
+                    continue  # The other view covers this crop edge.
+                shifted = replace(d, box=(x1+x, y1+top, x2+x, y2+top))
+                if allowed(shifted):
+                    people.append(shifted)
+        if not people:
+            return balls
+        # Prefer a tighter high-confidence box to a redundant larger box.
+        boxes = [(x1, y1, x2-x1, y2-y1) for x1, y1, x2, y2 in (d.box for d in people)]
+        indices = self.cv2.dnn.NMSBoxes(boxes, [d.confidence for d in people], self.confidence, .38)
+        return [people[i] for i in self.np.asarray(indices).reshape(-1)] + balls
 
 
 def iou(a, b):
@@ -118,8 +159,8 @@ class Track:
 
 class Tracker:
     """Conservative one-to-one image association. No inferred missing positions."""
-    def __init__(self, clip_id, max_gap_ms=800):
-        self.clip_id = clip_id
+    def __init__(self, clip_id, max_gap_ms=800, *, id_scope=None):
+        self.id_prefix = f"{clip_id}:{id_scope}" if id_scope else clip_id
         self.max_gap_ms = max_gap_ms
         self.active = []
         self.next_id = 1
@@ -151,13 +192,16 @@ class Tracker:
                 distance = math.hypot(da-ta-dx, db-tb-dy)/scale
                 overlap = iou(predicted, d.box)
                 if overlap > .08 or distance <= .80:
-                    options.append((distance + (1-overlap)*.60, i, j))
+                    kit_conflict = (t.kit_sample and t.kit_sample == t.last.kit_color
+                                    and d.kit_color and t.kit_sample != d.kit_color)
+                    options.append((distance + (1-overlap)*.60 + (.45 if kit_conflict else 0), i, j))
         used_tracks, used_detections = set(), set()
         for _, i, j in sorted(options):
             if i in used_tracks or j in used_detections:
                 continue
             t = self.active[i]
             t.previous = (t.last, t.seen_ms)
+            t.kit_sample = t.last.kit_color
             t.last, t.seen_ms = detections[j], time_ms
             used_tracks.add(i)
             used_detections.add(j)
@@ -165,7 +209,7 @@ class Tracker:
             t.missing = i not in used_tracks
         for j, detection in enumerate(detections):
             if j not in used_detections:
-                self.active.append(Track(f"{self.clip_id}:{self.next_id}", detection, time_ms))
+                self.active.append(Track(f"{self.id_prefix}:{self.next_id}", detection, time_ms))
                 self.next_id += 1
         return self.active
 
@@ -340,7 +384,7 @@ KIT_COLORS = ("red", "orange", "yellow", "green", "cyan", "blue", "purple", "red
 
 
 def kit_sample(cv2, np, frame, box):
-    """Name a dominant torso hue, leaving neutral, mixed and grass-like crops unresolved."""
+    """Name a dominant shirt color when the torso is distinct from its background."""
     x1, y1, x2, y2 = map(round, box)
     width, height = x2 - x1, y2 - y1
     if width < 8 or height < 22:
@@ -351,8 +395,16 @@ def kit_sample(cv2, np, frame, box):
     patch = cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     inset = width // 4
     torso = patch[:, x1 + inset - left:x2 - inset - left].reshape(-1, 3)
+    background = np.concatenate((patch[:, :x1-left], patch[:, x2-left:]), axis=1).reshape(-1, 3)
+    if background.size:
+        white = (torso[:, 1] < 54) & (torso[:, 2] > 162)
+        if white.mean() >= .72 and np.median(torso[:, 2]) > np.median(background[:, 2]) + 24:
+            return "white"
+        dark = torso[:, 2] < 62
+        if dark.mean() >= .80 and np.median(torso[:, 2]) < np.median(background[:, 2]) - 33:
+            return "black"
     chromatic = (torso[:, 1] >= 85) & (torso[:, 2] >= 95)
-    boundaries = (10, 20, 35, 84, 101, 131, 170)
+    boundaries = (10, 20, 40, 84, 101, 131, 170)
     buckets = np.digitize(torso[:, 0], boundaries)
     counts = np.bincount(buckets[chromatic], minlength=len(KIT_COLORS))
     counts[0] += counts[-1]
@@ -360,13 +412,59 @@ def kit_sample(cv2, np, frame, box):
     index = int(np.argmax(counts))
     if counts[index] < torso.shape[0] * .60:
         return None
+    if KIT_COLORS[index] == "yellow" and np.median(torso[:, 2]) < 160:
+        return None
     if KIT_COLORS[index] == "green":
-        background = np.concatenate((patch[:, :x1-left], patch[:, x2-left:]), axis=1).reshape(-1, 3)
         grass = (background[:, 0] >= 25) & (background[:, 0] < 84) & (background[:, 1] >= 50)
         shirt_brightness = np.median(torso[chromatic & (buckets == index), 2])
         if grass.sum() < 10 or shirt_brightness < np.percentile(background[grass, 2], 85) + 18:
             return None
     return KIT_COLORS[index]
+
+
+def calibrated_boundary(cv2, np, shape, calibration, length, width):
+    """Return the visible portion of a verified rectangle in image pixels."""
+    h, w = shape[:2]
+    inverse = np.linalg.inv(calibration.matrix)
+    projected = np.array([(0, 0, 1), (length, 0, 1), (length, width, 1), (0, width, 1)]) @ inverse.T
+    depth = projected[:, 2]
+    if np.any(np.abs(depth) < 1e-9) or np.min(depth)*np.max(depth) < 0:
+        return None  # A full-pitch corner falls across the camera horizon.
+    corners = projected[:, :2] / depth[:, None]
+    if not np.isfinite(corners).all() or np.abs(corners).max() > 100*max(w, h):
+        return None
+    frame = np.array([(0, 0), (w-1, 0), (w-1, h-1), (0, h-1)], dtype=np.float32)
+    area, polygon = cv2.intersectConvexConvex(corners.astype(np.float32), frame)
+    if area <= 0 or polygon is None:
+        return None
+    return polygon.reshape(-1, 2).round(2).tolist()
+
+
+def pitch_detections(cv2, np, frame, detector, calibration, length, width):
+    """Gate person boxes by ground contact before track association."""
+    auto = detect_pitch(cv2, np, frame)
+    verified = calibration is not None and calibration.status == "verified"
+    exact = calibrated_boundary(cv2, np, frame.shape, calibration, length, width) if verified else None
+    polygon = exact or (auto.polygon_xy if auto else None)
+    boundary = {"polygon_xy": polygon, "source": "verified_calibration" if exact else auto.source} if polygon else None
+    status = "verified" if verified else "estimated" if auto else "unavailable"
+    if status == "unavailable":
+        return [], boundary, status, 0
+    rejected = 0
+
+    def accepts_person(point):
+        nonlocal rejected
+        if verified:
+            xy = calibration.project(point)
+            inside = xy is not None and 0 <= xy[0] <= length and 0 <= xy[1] <= width
+        else:
+            inside = auto.contains(point)
+        rejected += not inside
+        return inside
+
+    detections = detector.detect(frame, polygon, accepts_person=accepts_person)
+    return [replace(d, kit_color=kit_sample(cv2, np, frame, d.box))
+            if d.object_type == "player" else d for d in detections], boundary, status, rejected
 
 
 def object_row(track, calibration, length, width, identities):
@@ -388,7 +486,8 @@ def object_row(track, calibration, length, width, identities):
             "confidence": None if track.missing else d.confidence,
             "bbox_xyxy": None if track.missing else d.box,
             "x_m": None if not xy else round(xy[0], 3), "y_m": None if not xy else round(xy[1], 3),
-            "projection_status": status, "kit_color_hint": None}
+            "projection_status": status, "kit_color_hint": None,
+            "on_pitch": d.object_type == "player" and not track.missing}
 
 
 def small_frame(cv2, frame):
@@ -449,7 +548,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         frames, summaries = [], []
         observed_ids = set()
         for start, end, clip, segment in windows:
-            tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)))
+            tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=TRACK_ID_SCOPE)
             if not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
             # Do not invent clock from frame index/FPS when the decoder has no timestamps.
@@ -501,16 +600,16 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 period_ms = segment.period_time(video_ms)
                 if pending_cut:
                     tracker.reset()
-                tracks = tracker.update(detector.detect(img), video_ms)
+                detections, boundary, pitch_status, off_pitch = pitch_detections(
+                    cv2, np, img, detector, cal, length, width)
+                counters["off_pitch_candidates"] += off_pitch
+                counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
+                tracks = tracker.update(detections, video_ms)
                 rows = [object_row(t, cal, length, width, identities) for t in tracks]
                 for track, row in zip(tracks, rows):
-                    if track.missing or track.last.object_type != "player" or row["projection_status"] == "off_pitch":
-                        track.kit_sample = None
-                        continue
-                    color = kit_sample(cv2, np, img, track.last.box)
-                    if color is not None and color == track.kit_sample:
+                    color = track.last.kit_color
+                    if not track.missing and color is not None and color == track.kit_sample:
                         row["kit_color_hint"] = color
-                    track.kit_sample = color
                 observed_ids.update(t.id for t in tracks if not t.missing and t.last.object_type == "player")
                 seen_players = set()
                 for row in rows:
@@ -530,7 +629,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "calibration_status": cal.status if cal else "uncalibrated",
                                "calibration_fit_rms_m": cal.rms_m if cal else None,
                                "calibration_check_max_m": cal.check_max_m if cal else None,
-                               "camera_cut_suspected": pending_cut, "objects": rows})
+                               "camera_cut_suspected": pending_cut,
+                               "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
+                               "off_pitch_candidates": off_pitch, "objects": rows})
                 pending_cut = False
                 sampled += 1
             summaries.append({"clip_id": clip["id"], "sampled_frames": sampled,
@@ -542,7 +643,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     finally:
         cap.release()
     if set(identities) - observed_ids:
-        raise ValueError("Reviewed identity map includes tracks not observed in this run")
+        raise ValueError("Reviewed identity map includes tracks not observed in this run. Regenerate it for the current report.")
+    roles = annotate_video_roles(frames, coordinate_length_m=length, coordinate_width_m=width,
+                                 dimensions_assumed=bool(calibration_data.get("dimensions_assumed", False)))
     with Path(video_path).open("rb") as handle:
         source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
     with Path(model).open("rb") as handle:
@@ -554,8 +657,10 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "frame_width": frame_width, "frame_height": frame_height,
             "sample_fps": sample_fps, "confidence_threshold": confidence, "max_calibration_error_m": max_error_m,
             "detector": "opencv-zoo-yolox-s-coco", "source_sha256": source_hash, "model_sha256": model_hash,
-            "identity_policy": "reviewed mappings only; anonymous detections can include officials",
-            "kit_color_policy": "review hint from two agreeing chromatic torso samples; officials and staff may also qualify",
+            "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
+            "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
+            "kit_color_policy": "review hint from two agreeing torso samples",
+            "role_inference": roles,
             "sync": [{"segment_id": s.id, "status": s.sync_status,
                       "check_max_ms": s.check_max_ms} for s in aligned.values()],
             "calibration": [{"segment_id": c.segment_id, "status": c.status,

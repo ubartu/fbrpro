@@ -46,6 +46,7 @@ h2{font-size:1.27rem;line-height:1.2;letter-spacing:-.025em;margin:1px 0 0}
 #first-sample{margin-top:6px;font-size:.72rem}
 .error{color:#a13b2e}.legend{display:flex;flex-wrap:wrap;gap:11px;margin-top:7px;font-size:.68rem;color:var(--muted)}
 .legend span{display:flex;align-items:center;gap:5px}.legend i{width:8px;height:8px;border-radius:50%;background:#6aae78}.legend .legend-unknown{background:#e1ae5e}.legend .legend-ball{background:#f7f6ed;border:1px solid #4d7562}
+.legend [hidden]{display:none}.legend .legend-kit-a{background:#7ad8f6}.legend .legend-kit-b{background:#ff99bd}.legend .legend-gk{background:#d6baff}.legend b{font-weight:inherit}
 .evidence-panel,.tools{margin-top:14px}.metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(182px,1fr));gap:9px;margin-top:9px}
 .metric-card{border:1px solid var(--line);border-radius:8px;background:#f5f9f4;padding:10px;min-width:0}
 .metric-card h3{font-size:.81rem}.metric-card .metric-value{font-size:1.34rem;font-weight:760;letter-spacing:-.04em;color:#1b6449}.metric-card small{display:block;font-size:.73rem;color:var(--muted)}

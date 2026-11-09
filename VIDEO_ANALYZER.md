@@ -22,7 +22,8 @@ python -m football_normalizer.video_ui --model /path/to/object_detection_yolox_2
 Keep that process open and visit [Video Analysis on localhost](http://127.0.0.1:8765/video/).
 Choose **Match video**, move to the moment you want to inspect, and click
 **Track the next 8 seconds**. A tracking preview accepts videos up to 256 MB,
-draws person and any detected ball boxes, and can be saved as a report.
+draws the pitch outline and on-pitch detections over the footage, and can be
+saved as a report.
 The local app runs on this computer. Preview footage is deleted from the
 app's temporary directory after processing. For pitch projections and
 individual movement rates, follow the aligned fixture workflow below.
@@ -30,6 +31,26 @@ individual movement rates, follow the aligned fixture workflow below.
 Add `--demo-video /path/to/sample.mp4 --demo-tracking /path/to/video-tracking.json
 --demo-plan /path/to/clip-plan.json` to enable **Load real match demo**.
 The demo loads the matching footage, tracking and clip markers together.
+
+### Pitch, shirts and goalkeeper hints
+
+- A person's foot point must be within the pitch before the detection can
+  enter a track. Verified camera calibration supplies the boundary when
+  available. Otherwise, each frame uses the visible turf and markings to
+  estimate the boundary. When neither is available, tracking waits for a
+  usable view. The estimated outline can miss part of the field or include
+  runoff when a touchline is hard to see.
+- A second look at overlapping, enlarged parts of the pitch helps detect
+  smaller players in wide shots. Color agreement can help preserve a track.
+  Occlusion, camera cuts and very small players can still produce gaps.
+- Two distinct, repeatedly co-visible shirt colors establish kit groups in
+  the current shot. Unclear or conflicting shirts remain unassigned. The
+  groups do not change the reviewed lineup and can leave officials anonymous.
+- **GK?** marks a probable goalkeeper when a distinct shirt and a continuous
+  run of verified positions near one goal support the hint. An ordinary
+  outline does not establish where the goals are. Upload previews without
+  camera calibration can show kit groups and boxes. Use the aligned fixture
+  workflow for goalkeeper hints and pitch positions.
 
 ## Run a fixture
 

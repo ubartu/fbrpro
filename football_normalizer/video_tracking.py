@@ -24,6 +24,7 @@ from .video_roles import annotate_video_roles
 
 VERSION = "fbrpro-video-tracking-v1"
 TRACK_ID_SCOPE = "pitch-v2"
+DEFAULT_SAMPLE_FPS = 10.0
 MAX_FULL_VIDEO_MS = 6 * 60 * 60 * 1000
 
 
@@ -511,7 +512,7 @@ def small_frame(cv2, frame):
     return cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (64, 36), interpolation=cv2.INTER_AREA)
 
 
-def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=5.0,
+def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=DEFAULT_SAMPLE_FPS,
         confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None,
         pitch_model=None, ball_model=None, inference_backend="opencv", inference_cache=None):
     """Return a tracking manifest and pitch replay observations for selected clips."""
@@ -559,6 +560,14 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if through_eof and (len(windows) != 1 or windows[0][0] != 0 or
                         windows[0][3].sync_status != "preview"):
         raise ValueError("Full video tracking needs one video-only window starting at zero")
+    scope = f"{TRACK_ID_SCOPE}-ball" if ball_model else TRACK_ID_SCOPE
+    if sample_fps != 5:
+        rate = str(float(sample_fps)).removesuffix(".0")
+        scope = f"{scope}-fps{rate}"
+    track_prefixes = {f"{clip['id']}:{scope}" for _, _, clip, _ in windows}
+    if any(key.rpartition(":")[0] not in track_prefixes for key in identities):
+        raise ValueError("Reviewed identity map uses different clips or tracking settings. "
+                         "Regenerate it or rerun with the original settings.")
     detector = YoloX(model, confidence, inference_backend=inference_backend, inference_cache=inference_cache)
     automatic_model = None
     ball_detector = BallDetector(cv2, np, ball_model, inference_backend=inference_backend,
@@ -573,7 +582,6 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         frames, summaries = [], []
         observed_ids = set()
         for start, end, clip, segment in windows:
-            scope = f"{TRACK_ID_SCOPE}-ball" if ball_detector else TRACK_ID_SCOPE
             tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=scope)
             ball_tracker = BallTracker(clip["id"], frame_width) if ball_detector else None
             camera_motion = CameraMotion(cv2, np)
@@ -802,7 +810,7 @@ def main(argv=None):
     for arg in ("plan", "model", "calibration", "output"):
         parser.add_argument("--"+arg, type=Path, required=True)
     parser.add_argument("--clip", action="append", dest="clip_ids")
-    parser.add_argument("--sample-fps", type=float, default=5)
+    parser.add_argument("--sample-fps", type=float, default=DEFAULT_SAMPLE_FPS)
     parser.add_argument("--confidence", type=float, default=.35)
     parser.add_argument("--ball-model", type=Path, help="1280 px single-class ball ONNX model")
     parser.add_argument("--max-error-m", type=float, default=2)

@@ -36,6 +36,7 @@ class ReviewServerTests(unittest.TestCase):
         self.server = SimpleNamespace(
             hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx", pitch_model=None,
             inference_backend="auto", inference_cache={}, ball_model=None,
+            sample_fps=video_ui.video_tracking.DEFAULT_SAMPLE_FPS,
             demo={"video": video, "tracking": tracking}, demo_calibration=None, job=Lock(), active_job=None)
 
     def call(self, method, path, *, headers=None, body=None):
@@ -57,6 +58,7 @@ class ReviewServerTests(unittest.TestCase):
         self.assertFalse(json.loads(body)["demo_plan_available"])
         self.assertEqual(json.loads(body)["max_full_upload_bytes"], video_ui.MAX_FULL_UPLOAD_BYTES)
         self.assertEqual(json.loads(body)["max_full_video_ms"], video_ui.MAX_VIDEO_MS)
+        self.assertEqual(json.loads(body)["sample_fps"], 10)
         self.assertEqual(self.call("GET", "/api/demo/plan")[0], 404)
         status, headers, body = self.call("GET", "/api/demo/video", headers={"Range": "bytes=3-5"})
         self.assertEqual((status, headers["Content-Range"], body), (206, "bytes 3-5/10", b"345"))
@@ -76,6 +78,7 @@ class ReviewServerTests(unittest.TestCase):
         captured = []
 
         def track(source, plan, model, calibration, **kwargs):
+            self.assertEqual(kwargs["sample_fps"], 10)
             self.assertEqual(source.read_bytes(), b"raw video bytes")
             self.assertEqual(calibration["segments"], [])
             self.assertEqual(plan["alignment_segments"][0]["kind"], "preview")
@@ -102,6 +105,7 @@ class ReviewServerTests(unittest.TestCase):
         captured = []
 
         def track(source, plan, model, calibration, *, through_eof, on_progress, **kwargs):
+            self.assertEqual(kwargs["sample_fps"], 10)
             self.assertTrue(through_eof)
             self.assertEqual(plan["analysis_scope"], "full_video")
             self.assertEqual(plan["selected_video_ms"], 20_000)

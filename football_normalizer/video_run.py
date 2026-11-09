@@ -122,7 +122,7 @@ def main(argv=None):
     for arg in ("identity-map", "context", "bundle"):
         parser.add_argument("--" + arg, type=Path)
     parser.add_argument("--clip", action="append", help="Only track this clip ID (repeatable)")
-    parser.add_argument("--sample-fps", type=float, default=5)
+    parser.add_argument("--sample-fps", type=float, default=video_tracking.DEFAULT_SAMPLE_FPS)
     parser.add_argument("--confidence", type=float, default=.35)
     parser.add_argument("--max-error-m", type=float, default=2)
     parser.add_argument("--parquet", action="store_true", help="Export nonempty canonical tracking as Parquet")

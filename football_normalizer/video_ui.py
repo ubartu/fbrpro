@@ -129,11 +129,12 @@ class FullVideoJob:
 
 class ReviewServer(ThreadingHTTPServer):
     def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None, *,
-                 inference_backend="auto", ball_model=None):
+                 inference_backend="auto", ball_model=None, sample_fps=video_tracking.DEFAULT_SAMPLE_FPS):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
         self.pitch_model = pitch_model
         self.ball_model = ball_model
+        self.sample_fps = sample_fps
         self.inference_backend = inference_backend
         self.inference_cache = {}
         self.demo = demo or {}
@@ -269,6 +270,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                            "max_calibration_header": MAX_CALIBRATION_HEADER,
                                            "automatic_calibration": self.server.pitch_model is not None,
                                            "dedicated_ball_tracking": self.server.ball_model is not None,
+                                           "sample_fps": self.server.sample_fps,
                                            "inference_backend": self.server.inference_backend})
         elif path == "/api/progress":
             job = self.requested_job(target)
@@ -384,7 +386,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                inference_cache=self.server.inference_cache)
                 report = video_tracking.run(source, plan, self.server.model,
                                             EMPTY_CALIBRATION if calibration is None else calibration,
-                                            confidence=.23, **options)
+                                            confidence=.23, sample_fps=self.server.sample_fps, **options)
                 source.unlink()
                 if full:
                     actual_end = report["clips"][0]["video_end_ms"]
@@ -423,6 +425,8 @@ def main(argv=None):
     parser.add_argument("--model", required=True, type=Path, help="OpenCV Zoo YOLOX-s ONNX weights")
     parser.add_argument("--pitch-model", type=Path, help="32-landmark, 640 px football pose ONNX model")
     parser.add_argument("--ball-model", type=Path, help="Single-class, 1280 px football ball ONNX model")
+    parser.add_argument("--sample-fps", type=float, default=video_tracking.DEFAULT_SAMPLE_FPS,
+                        help="Tracking samples per second (default: %(default)g)")
     parser.add_argument("--inference-backend", choices=BACKENDS, default="auto",
                         help="Use Core ML when available, or force one backend")
     parser.add_argument("--demo-video", type=Path)
@@ -444,6 +448,8 @@ def main(argv=None):
         parser.error("--demo-calibration requires the demo video.")
     if not 1 <= args.port <= 65535:
         parser.error("Choose a port between 1 and 65535.")
+    if not 0 < args.sample_fps <= 30:
+        parser.error("Choose a sampling rate greater than zero and at most 30 fps.")
     models = tuple(path for path in (args.model, args.pitch_model, args.ball_model) if path is not None)
     if not all(path.is_file() for path in (*models, *demo.values())):
         parser.error("The model and any supplied demo paths must be readable files.")
@@ -455,7 +461,8 @@ def main(argv=None):
         if args.demo_calibration:
             video_tracking.calibration_from(calibration, 2)
         with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model,
-                          inference_backend=args.inference_backend, ball_model=args.ball_model) as server:
+                          inference_backend=args.inference_backend, ball_model=args.ball_model,
+                          sample_fps=args.sample_fps) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

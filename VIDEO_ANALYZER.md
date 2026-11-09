@@ -57,13 +57,18 @@ Keep that process open and visit [Video Analysis on localhost](http://127.0.0.1:
 Choose **Match video**, then choose a tracking mode:
 
 - **Track full video** starts at the beginning and follows the decoder to the
-  end. It samples the footage at 5 frames per second and keeps the same tracker
+  end. It targets 10 frames per second and keeps the same tracker
   throughout, resetting at suspected camera cuts. Follow the progress on the
   page and use **Stop tracking** to end a run.
   The app accepts up to 4 GiB and up to six hours of footage, subject to local
   temporary storage.
 - **Track the next 8 seconds** samples a short window from the playhead.
   This mode accepts videos up to 256 MB.
+
+Both modes and the tracking commands default to 10 samples per second,
+limited by the frames available in the source. Pass `--sample-fps 5` when
+starting the local app or running the tracking commands to use the previous
+rate. Reviewed identity maps must be reapplied at the rate used to export them.
 
 Both modes draw the pitch outline and on-pitch detections over the footage and
 can save a tracking report. With the landmark model available, the app

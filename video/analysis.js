@@ -288,6 +288,7 @@ function renderClipMarkers(min,max){
 function renderFrame(){
   scheduledFrame=0;
   const hasVideo=Number.isFinite(video.duration);
+  if(hasVideo&&tracking&&video.paused===false&&!video.ended)queueFrame();
   const ms=hasVideo?video.currentTime*1000:replayMs;
   $("video-clock").textContent=clock(hasVideo?ms:0);
   $("replay-time").textContent=clock(ms);
@@ -402,6 +403,8 @@ $("show-boxes").addEventListener("change",()=>{
   showOverlayControl();lastFrame=undefined;footageLayer.replaceChildren();queueFrame();
 });
 video.addEventListener("timeupdate",queueFrame);
+video.addEventListener("play",queueFrame);
+video.addEventListener("pause",queueFrame);
 video.addEventListener("seeked",queueFrame);
 video.addEventListener("loadedmetadata",()=>{
   $("video-stage").classList.remove("empty");$("video-empty").hidden=true;
@@ -447,7 +450,8 @@ function setupTracking(data,name){
   teamColours=new Map([...teams].sort().map((team,i)=>[team,palette[i%palette.length]]));
   replayMs=data.frames[0]?.video_time_ms??0;
   $("tracking-name").textContent=name;
-  $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames":"No frames";
+  $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames"+
+    (positive(data.sample_fps)?" · "+fmt(data.sample_fps)+" fps target":""):"No frames";
   showSession();showOverlayControl();setupIdentityRoster();configureTimeline();renderMetrics();
 }
 $("tracking-file").addEventListener("change",async e=>{
@@ -856,6 +860,7 @@ if(/^https?:$/.test(globalThis.location?.protocol||"")){
     $("analysis-hint").textContent=(sampleAvailable?"Try the real match demo, or open your own video. ":"Open a video. ")+
       (positive(fullUploadLimit)?"Track the next 8 seconds for a quick check, or track the full recording from the start.":
        "Track a short window from the playhead.")+
+      (positive(info.sample_fps)?" Tracking targets "+fmt(info.sample_fps)+" frames per second.":"")+
       (info.automatic_calibration?" Pitch replay maps visible field markings automatically.":"");
     updateAnalysisControls();
   }).catch(()=>{});

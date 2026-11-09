@@ -87,8 +87,12 @@ class TrackingTests(unittest.TestCase):
                   patch("football_normalizer.video_tracking.pitch_detections",
                         return_value=([], None, "unavailable", 0))):
                 report = run(source, plan, source, calibration, through_eof=True, on_progress=progress.append)
+                with self.assertRaisesRegex(ValueError, "different clips or tracking settings"):
+                    run(source, plan, source, calibration, through_eof=True,
+                        identity_map={"c:pitch-v2:1": {"team_id": "team"}})
 
-        self.assertEqual(progress, [0, 250, 420, 600])
+        self.assertEqual(report["sample_fps"], 10)
+        self.assertEqual(progress, [0, 250, 310, 420, 600])
         self.assertEqual([f["period_time_ms"] for f in report["frames"]], progress)
         self.assertEqual(report["clips"][0]["decoded_frames"], len(timestamps))
         self.assertEqual(report["clips"][0]["video_end_ms"], 780)

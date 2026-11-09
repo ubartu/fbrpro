@@ -668,9 +668,16 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 if ball_tracker:
                     candidates = [Detection("ball", score, box)
                                   for score, box in ball_detector.detect(img, boundary)]
-                    ball = ball_tracker.update(candidates, video_ms, motion)
+                    ball = ball_tracker.update(
+                        candidates, video_ms, motion,
+                        recover=lambda center: [Detection("ball", score, box)
+                                                for score, box in ball_detector.recover(img, boundary, center)],
+                    )
                     if ball is not None:
                         rows.append(object_row(ball, cal, length, width, identities))
+                        if ball.recovered:
+                            counters["ball_crop_recoveries"] += 1
+                            rows[-1]["detection_source"] = "ball_crop"
                     ball_status = ("observed" if ball and not ball.missing else
                                    "missing" if boundary is not None else "pitch_unavailable")
                 else:

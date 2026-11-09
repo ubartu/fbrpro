@@ -43,9 +43,12 @@ yolo export model=ball11n.pt format=onnx imgsz=1280 opset=17 simplify=False nms=
 
 Pass `--ball-model /path/to/ball11n.onnx` to the local app, or name the export
 `football-ball-detection.onnx` beside the person model. The ball detector runs
-locally through the same inference backend. It tracks a single ball across
-sampled frames, resets after camera cuts and leaves gaps where the ball
-cannot be located confidently. Turn on the footage overlay to see its
+locally through the same inference backend. If the full-frame detector misses
+a recently tracked ball, it checks a crop around the predicted position.
+Crop detections fill individual gaps while the full-frame detections steer
+the trajectory.
+The track resets after camera cuts and leaves gaps where the ball cannot be
+located confidently. Turn on the footage overlay to see its
 yellow ring, or use **Jump to first ball detection**. On the pitch replay,
 the marker is the ball's ground-plane projection. An airborne ball can
 appear away from its true position.
@@ -295,3 +298,26 @@ pitch mask to both the annotations and detections, and excludes ball boxes.
 It exports sampled MOT text files and reports TrackEval HOTA, DetA, AssA,
 and ID switches. These are scoped comparisons against FBRPRO's processing
 settings and differ from the official challenge protocol.
+
+## Testing ball recognition around match actions
+
+The [SoccerNet spotting kit](https://github.com/SoccerNet/sn-spotting) marks the
+time and type of an action. Use those times to select review windows and
+[SoccerNet Tracking](https://huggingface.co/datasets/SoccerNet/SN-Tracking-2023)
+boxes to measure localization. The benchmark compares the same detector and
+frames with crop recovery enabled and disabled. It reports matches within
+12 source-image pixels, unmatched predictions, and the cost of extra crops.
+It reports results across the clip and within two seconds on either side of
+each action.
+
+```sh
+python -m football_normalizer.video_ball_benchmark /path/to/SNMOT-135 \
+  --model /path/to/object_detection_yolox_2022nov.onnx \
+  --ball-model /path/to/football-ball-detection.onnx \
+  --output reports/tracking-benchmark/ball-spotting-validation.json
+```
+
+The benchmark defaults to the action timestamp in each tracking sequence.
+To use SoccerNet's `Labels-ball.json` for a single aligned clip, pass
+`--spotting-labels /path/to/Labels-ball.json --half 1 --clip-start-ms 816000`
+with the actual half and clip start on that broadcast's video timeline.

@@ -74,21 +74,21 @@ class FootballYolo(YoloX):
         return result
 
 
-def samples(sequence, stride):
+def samples(sequence, stride, *, object_type="player"):
     meta = configparser.ConfigParser()
     meta.read(sequence / "seqinfo.ini")
     info = meta["Sequence"]
     game = configparser.ConfigParser()
     game.read(sequence / "gameinfo.ini")
-    person_ids = {int(k.removeprefix("trackletid_")) for k, v in game["Sequence"].items()
-                  if k.startswith("trackletid_") and v.split(";")[0].strip() != "ball"}
+    ids = {int(k.removeprefix("trackletid_")) for k, v in game["Sequence"].items()
+           if k.startswith("trackletid_") and (v.split(";")[0].strip() == "ball") == (object_type == "ball")}
     labels = defaultdict(list)
     with (sequence / "gt" / "gt.txt").open() as stream:
         for frame, id_, x, y, w, h, score, *_ in csv.reader(stream):
             f, key = int(frame), int(id_)
-            if key in person_ids and float(score) > 0 and (f-1) % stride == 0:
+            if key in ids and float(score) > 0 and (f-1) % stride == 0:
                 x, y, w, h = map(float, (x, y, w, h))
-                labels[f].append((key, Detection("player", 1.0, (x, y, x+w, y+h))))
+                labels[f].append((key, Detection(object_type, 1.0, (x, y, x+w, y+h))))
     return info.getfloat("frameRate"), [
         (f, sequence / info["imDir"] / f"{f:06d}{info['imExt']}", labels[f])
         for f in range(1, info.getint("seqLength")+1, stride)

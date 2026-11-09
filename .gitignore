@@ -6,4 +6,5 @@ build/
 dist/
 normalized-*/
 reports/
+video-runs/
 dashboard/local.html

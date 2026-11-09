@@ -16,6 +16,19 @@ def alignment(*ranges):
 
 
 class VideoTests(unittest.TestCase):
+    def test_checked_clock_and_non_live_segments(self):
+        a = alignment((1, 0, 30000, 10000, 40000))
+        segment = a["segments"][0]
+        segment["check_anchors"] = [{"match_ms": 9000, "video_ms": 19250}]
+        ev = [event(0, 1, "home"), event(10000, 1, "home")]
+        o = plan(ev, a, "home", in_possession_limit=1)["clips"][0]["opportunities"][0]
+        self.assertEqual((o["reason"], o["sync_status"], o["sync_check_max_ms"]),
+                         ("own_possession_sample", "verified", 250))
+        segment["check_anchors"][0]["video_ms"] = 19600
+        self.assertEqual(plan(ev, a, "home", in_possession_limit=1)["clips"], [])
+        segment.update(kind="replay", check_anchors=[])
+        self.assertEqual(plan(ev, a, "home", in_possession_limit=1)["clips"], [])
+
     def test_regain_and_build_up_merge_without_losing_their_denominators(self):
         ev = [event(1000, 1, "away"), event(11000, 1, "away"),
               event(12000, 2, "home"), event(20000, 2, "home")]

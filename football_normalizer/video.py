@@ -17,11 +17,26 @@ class Segment:
     match_end_ms: int
     video_start_ms: int
     video_end_ms: int
+    kind: str = "live"
+    check_max_ms: int | None = None
 
     def map(self, match_ms):
         span = self.match_end_ms - self.match_start_ms
         return round(self.video_start_ms + (match_ms - self.match_start_ms)
                      * (self.video_end_ms - self.video_start_ms) / span)
+
+    def period_time(self, video_ms):
+        span = self.video_end_ms - self.video_start_ms
+        return round(self.match_start_ms + (video_ms - self.video_start_ms)
+                     * (self.match_end_ms - self.match_start_ms) / span)
+
+    @property
+    def sync_status(self):
+        if self.kind != "live":
+            return self.kind
+        if self.check_max_ms is None:
+            return "unchecked"
+        return "verified" if self.check_max_ms <= 500 else "rejected"
 
 
 def segments_from(data):
@@ -36,7 +51,23 @@ def segments_from(data):
         if (any(type(v) is not int or v < 0 for v in vals) or s.period < 1
                 or s.match_start_ms >= s.match_end_ms or s.video_start_ms >= s.video_end_ms):
             raise ValueError(f"{s.id}: invalid clock interval")
-        out.append(s)
+        kind = row.get("kind", "live")
+        if kind not in ("live", "replay", "close_up", "break", "preview"):
+            raise ValueError(f"{s.id}: unknown camera segment kind")
+        checks = row.get("check_anchors", [])
+        if not isinstance(checks, list):
+            raise ValueError(f"{s.id}: check_anchors must be a list")
+        errors = []
+        for check in checks:
+            if not isinstance(check, dict):
+                raise ValueError(f"{s.id}: invalid independent clock anchor")
+            match_ms, video_ms = check.get("match_ms"), check.get("video_ms")
+            if (type(match_ms) is not int or type(video_ms) is not int
+                    or not s.match_start_ms < match_ms < s.match_end_ms
+                    or not s.video_start_ms < video_ms < s.video_end_ms):
+                raise ValueError(f"{s.id}: independent anchors must be inside the segment")
+            errors.append(abs(s.map(match_ms) - video_ms))
+        out.append(Segment(s.id, *vals, kind, max(errors, default=None)))
     if not out or len({s.id for s in out}) != len(out):
         raise ValueError("Alignment requires at least one segment with unique IDs")
     ordered = sorted(out, key=lambda s: (s.period, s.match_start_ms))
@@ -68,7 +99,7 @@ def possessions(events):
     return blocks
 
 
-def opportunities(events, team):
+def opportunities(events, team, *, include_in_possession=False):
     """Return candidate sequences, not confirmed off-ball behaviours."""
     blocks = possessions(events)
     out = []
@@ -88,6 +119,9 @@ def opportunities(events, team):
         elif side != team and b["end"]-b["start"] >= 10000:
             start, end = b["start"]+3000, min(b["end"], b["start"]+13000)
             reason = "opposition_build_up_sample"
+        elif include_in_possession and side == team and b["end"] - b["start"] >= 6000:
+            start, end = b["start"], min(b["end"], b["start"]+15000)
+            reason = "own_possession_sample"
         else:
             continue
         out.append({"id": f"opportunity-{len(out)+1}", "reason": reason, "period": period,
@@ -95,13 +129,13 @@ def opportunities(events, team):
     return out
 
 
-def plan(events, alignment, team, *, build_up_limit=10):
-    if type(build_up_limit) is not int or build_up_limit < 0:
-        raise ValueError("Build-up sample size must be a non-negative integer")
+def plan(events, alignment, team, *, build_up_limit=10, in_possession_limit=0):
+    if any(type(n) is not int or n < 0 for n in (build_up_limit, in_possession_limit)):
+        raise ValueError("Sample sizes must be non-negative integers")
     segments = segments_from(alignment)
     available, unaligned = [], []
-    for o in opportunities(events, team):
-        s = next((s for s in segments if s.period == o["period"]
+    for o in opportunities(events, team, include_in_possession=bool(in_possession_limit)):
+        s = next((s for s in segments if s.period == o["period"] and s.sync_status in {"verified", "unchecked"}
                   and s.match_start_ms <= o["match_start_ms"]
                   and o["match_end_ms"] <= s.match_end_ms), None)
         if not s:
@@ -111,11 +145,15 @@ def plan(events, alignment, team, *, build_up_limit=10):
         if start >= end:
             unaligned.append({**o, "exclusion": "No positive playback duration"})
             continue
-        available.append({**o, "segment_id": s.id, "video_start_ms": start, "video_end_ms": end})
-    buildup = [o for o in available if o["reason"] == "opposition_build_up_sample"]
+        available.append({**o, "segment_id": s.id, "video_start_ms": start, "video_end_ms": end,
+                          "sync_status": s.sync_status, "sync_check_max_ms": s.check_max_ms})
     # Midpoints of equally sized chronological buckets, deterministic across reruns.
-    n = min(len(buildup), build_up_limit)
-    sample_ids = {buildup[(2*i+1)*len(buildup)//(2*n)]["id"] for i in range(n)}
+    sample_ids = set()
+    for reason, limit in (("opposition_build_up_sample", build_up_limit),
+                          ("own_possession_sample", in_possession_limit)):
+        candidates = [o for o in available if o["reason"] == reason]
+        n = min(len(candidates), limit)
+        sample_ids.update(candidates[(2*i+1)*len(candidates)//(2*n)]["id"] for i in range(n))
     chosen = [o for o in available if o["reason"] == "regain_candidate" or o["id"] in sample_ids]
     clips = []
     for o in sorted(chosen, key=lambda o: (o["video_start_ms"], o["video_end_ms"])):
@@ -142,7 +180,7 @@ def read_rows(root, name):
         return [json.loads(line) for line in handle if line.strip()]
 
 
-def from_bundle(root, selector, alignment, side, limit):
+def from_bundle(root, selector, alignment, side, limit, *, in_possession_limit=0):
     if json.loads((root / "status.json").read_text()).get("status") != "accepted":
         raise ValueError("Expected an accepted normalized bundle")
     if not isinstance(alignment.get("video_id"), str) or not alignment["video_id"].strip():
@@ -159,13 +197,15 @@ def from_bundle(root, selector, alignment, side, limit):
     events = [e for e in read_rows(root, "events") if e["match_id"] == mid]
     if not events:
         raise ValueError("No normalized events for this match")
-    report = plan(events, alignment, team, build_up_limit=limit)
+    report = plan(events, alignment, team, build_up_limit=limit, in_possession_limit=in_possession_limit)
     players = {p["player_id"]: p["name"] for p in read_rows(root, "players")}
-    roster = sorted({a["player_id"] for a in read_rows(root, "appearances")
-                     if a["match_id"] == mid and a["team_id"] == team and a.get("participated")})
+    lineup = sorted({(a["player_id"], a["team_id"]) for a in read_rows(root, "appearances")
+                     if a["match_id"] == mid and a.get("participated")})
+    roster = [{"id": pid, "name": players.get(pid, pid), "team_id": tid} for pid, tid in lineup]
     report.update(match_id=mid, source_match_id=match.get("source", {}).get("record_id"),
+                  competition_id=match.get("competition_id"), season_id=match.get("season_id"),
                   video_id=alignment["video_id"], team_side=side,
-                  players=[{"id": id_, "name": players.get(id_, id_)} for id_ in roster],
+                  players=[p for p in roster if p["team_id"] == team], identity_roster=roster,
                   alignment_segments=alignment["segments"])
     content = json.dumps(report, sort_keys=True, ensure_ascii=False).encode("utf-8")
     report["plan_id"] = hashlib.sha256(content).hexdigest()
@@ -179,11 +219,13 @@ def main(argv=None):
     p.add_argument("--alignment", type=Path, required=True)
     p.add_argument("--team", choices=("home", "away"), required=True)
     p.add_argument("--build-up-limit", type=int, default=10)
+    p.add_argument("--in-possession-limit", type=int, default=0)
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args(argv)
     try:
         alignment = json.loads(args.alignment.read_text(encoding="utf-8"))
-        report = from_bundle(args.bundle, args.match, alignment, args.team, args.build_up_limit)
+        report = from_bundle(args.bundle, args.match, alignment, args.team, args.build_up_limit,
+                             in_possession_limit=args.in_possession_limit)
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(report, handle, ensure_ascii=False, indent=2, allow_nan=False)
             handle.write("\n")

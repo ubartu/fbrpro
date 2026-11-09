@@ -1,7 +1,8 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const video = $("video");
-const reason = {regain_candidate: "Team regain", opposition_build_up_sample: "Opposition build-up"};
+const reason = {regain_candidate: "Team regain", opposition_build_up_sample: "Opposition build-up",
+  own_possession_sample: "Team possession candidate"};
 const label = {observed:"Observed",not_observed:"Visible; not observed",unobservable:"Unobservable"};
 let fileUrl, playbackEnd, clipPlan, segments = [], tags = [];
 let videoRequest = 0, planRequest = 0;
@@ -54,7 +55,7 @@ $("video-file").addEventListener("change",e=>{if(e.target.files[0])setVideo(e.ta
 video.addEventListener("timeupdate",()=>{
   if(playbackEnd!==undefined&&video.currentTime>=playbackEnd){video.pause();playbackEnd=undefined;}
 });
-for(const [button,input] of [["take-start","vs1"],["take-end","vs2"]]){
+for(const [button,input] of [["take-start","vs1"],["take-end","vs2"],["take-check","vs3"]]){
   $(button).onclick=()=>{
     if(!Number.isFinite(video.duration))return status("alignment-status","Open a video first.",true);
     $(input).value=video.currentTime.toFixed(3);
@@ -71,13 +72,25 @@ $("add-segment").onclick=()=>{
     return status("alignment-status","Enter two increasing clock anchors and a valid half.",true);
   if(Number.isFinite(video.duration)&&row.video_end_ms>video.duration*1000+1)
     return status("alignment-status","The end anchor is beyond the video.",true);
+  if($("ms3").value.trim()||$("vs3").value.trim()){
+    const match_ms=seconds("ms3"),video_ms=seconds("vs3");
+    if(!validMs(match_ms)||!validMs(video_ms)||match_ms<=row.match_start_ms||match_ms>=row.match_end_ms||
+      video_ms<=row.video_start_ms||video_ms>=row.video_end_ms)
+      return status("alignment-status","The check event needs both times and must fall between the anchors.",true);
+    row.check_anchors=[{match_ms,video_ms}];
+    const expected=row.video_start_ms+(match_ms-row.match_start_ms)*(row.video_end_ms-row.video_start_ms)/
+      (row.match_end_ms-row.match_start_ms);
+    if(Math.abs(Math.round(expected)-video_ms)>500)
+      return status("alignment-status","Clock check differs by more than 0.5 seconds. Check the anchors or split the segment.",true);
+  }
   const ordered=[...segments,row].sort((a,b)=>a.period-b.period||a.match_start_ms-b.match_start_ms);
   if(segments.some(s=>s.id===row.id)||ordered.some((s,i)=>i>0&&(
     ordered[i-1].video_end_ms>s.video_start_ms||
     (ordered[i-1].period===s.period&&ordered[i-1].match_end_ms>s.match_start_ms))))
     return status("alignment-status","Segments must have unique IDs and cannot overlap or reverse order.",true);
   segments=ordered;
-  list("segments",segments.map(s=>s.id+" · half "+s.period+" · "+secs(s.video_start_ms)+" to "+secs(s.video_end_ms)));
+  list("segments",segments.map(s=>s.id+" · half "+s.period+" · "+secs(s.video_start_ms)+" to "+secs(s.video_end_ms)+
+    (s.check_anchors?" · clock checked":" · clock unchecked")));
   $("segment-id").value="";status("alignment-status","Segment added.");
 };
 $("download-alignment").onclick=()=>{
@@ -98,7 +111,8 @@ function parsePlan(data){
        o.video_start_ms>=o.video_end_ms))
       throw Error("The plan contains an invalid clip or opportunity.");
   }
-  if(data.players.some(p=>!p||typeof p.id!=="string"||typeof p.name!=="string"))
+  const validRoster=roster=>Array.isArray(roster)&&roster.every(p=>p&&typeof p.id==="string"&&typeof p.name==="string");
+  if(!validRoster(data.players)||(data.identity_roster!==undefined&&!validRoster(data.identity_roster)))
     throw Error("The plan contains an invalid player.");
   return data;
 }
@@ -117,6 +131,7 @@ $("plan-file").addEventListener("change",async e=>{
     $("clip").disabled=!data.clips.length;$("player").disabled=!data.players.length;
     status("plan-status",data.clips.length+" clips · "+secs(data.selected_video_ms)+" selected · video ID: "+data.video_id);
     refresh();
+    document.dispatchEvent(new CustomEvent("fbrpro:plan",{detail:{name:file.name}}));
   }catch(err){if(generation===planRequest)status("plan-status",err.message,true);}
 });
 $("clip").onchange=refresh;$("player").onchange=refresh;

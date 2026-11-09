@@ -23,9 +23,18 @@
 <label>Player B<select id="b"></select></label>
 </div>
 <div id="notice"></div>
-<p class="hint"><a href="#role-assessment">Jump to match roles ↓</a></p>
+<p class="hint"><a href="#role-assessment">Jump to match roles ↓</a> · <a href="#movement-evidence">Video evidence ↓</a></p>
 </section>
 <div id="results"></div>
+<section class="panel" id="movement-evidence" aria-labelledby="movement-title">
+ <div class="heading"><h2 id="movement-title">Video movement evidence</h2><div class="actions">
+  <button id="movement-upload" class="btn" type="button">Open movement report</button>
+  <input id="movement-file" type="file" accept=".json,application/json" hidden>
+  <a href="../video/index.html">Open video review ↗</a>
+ </div></div>
+ <p id="movement-file-status" class="status" role="status"></p>
+ <div id="movement-results"><p class="hint">Optional. Add a movement report to see clip evidence for the selected profiles.</p></div>
+</section>
 <div class="footer">Reports are read in this browser. Uploaded files stay on this device.</div>
 </main>
 <script id="sample-data" type="application/json">null</script>
@@ -57,6 +66,7 @@ const integer = n => Number.isSafeInteger(n) && n >= 0;
 const count = n => Number.isFinite(n) && n >= 0;
 const string = n => typeof n === "string" && n.length > 0;
 let report, sourceName, isSample;
+let movementReport, movementUploadGeneration=0;
 function validate(data){
  if(!data || data.version!=="midfield-v0.1" || !Array.isArray(data.matches) || !Array.isArray(data.profiles)) throw Error("Choose an fbrpro midfield-v0.1 report.");
  const ids = new Set();
@@ -185,7 +195,80 @@ function timeline(p,q,header){
  return '<section class="panel" id="role-assessment"><h2>Match role timeline</h2><p class="hint">These labels compare players in the same match and position group. Choose a match to see the rates behind its label.</p>'+
  '<div class="timeline"><table class="table">'+header.replace(">Measure<",">Match<")+'<tbody>'+dates.map(id=>'<tr><th scope="row"><button class="match-link" type="button" data-match="'+esc(id)+'">'+esc(matchLabel(id))+'</button></th>'+cell(p,id)+cell(q,id)+'</tr>').join("")+'</tbody></table></div></section>';
 }
+function movementMatchIds(data){
+ return data.analysis_scope==="selected_clips"?[data.match_id]:data.match_ids;
+}
+function validateMovement(data){
+ if(data?.version!=="fbrpro-video-metrics-v1"||
+    !["selected_clips","selected_clips_across_matches"].includes(data.analysis_scope))
+  throw Error("Choose an fbrpro movement report.");
+ const ids=movementMatchIds(data);
+ if(!Array.isArray(ids)||!ids.length||!ids.every(string)||new Set(ids).size!==ids.length)
+  throw Error("The movement report has invalid match IDs.");
+ const groups=data.position_groups??[];
+ const validMeasure=m=>m&&string(m.metric)&&string(m.label)&&["ms","episodes"].includes(m.unit)&&
+  [m.numerator,m.denominator,m.excluded].every(integer)&&m.numerator<=m.denominator&&
+  (m.coverage_pct===null||(count(m.coverage_pct)&&m.coverage_pct<=100))&&
+  (m.per_100===null||(count(m.per_100)&&m.per_100<=100))&&
+  Array.isArray(m.observations)&&m.observations.every(o=>o&&ids.includes(o.match_id)&&
+   (o.reason==null||string(o.reason)));
+ if(!Array.isArray(groups)||groups.some(g=>!g||!Object.hasOwn(GROUP,g.position_group)||!Array.isArray(g.players)||
+    g.players.some(p=>!p||!string(p.player_id)||!string(p.team_id)||!Array.isArray(p.measures)||!p.measures.every(validMeasure))))
+  throw Error("The movement report has invalid position-group evidence.");
+ return data;
+}
+function movementProfile(p){
+ if(!p||!string(p.player_id)||!string(movementReport.competition_id)||!string(movementReport.season_id)||
+    p.scope[0]!==movementReport.competition_id||p.scope[1]!==movementReport.season_id)return;
+ const group=movementReport.position_groups?.find(g=>g.position_group===p.scope[2]);
+ const entry=group?.players.find(v=>v.player_id===p.player_id&&v.team_id===p.team_id);
+ const ids=new Set(p.matches.map(m=>m.match_id));
+ if(entry?.measures.every(m=>m.observations.every(o=>ids.has(o.match_id))))return entry;
+}
+function movementCell(m,p){
+ if(!m)return '<td><small>'+(p?'No linked evidence for this profile':'Select a player')+'</small></td>';
+ const units=m.unit==="ms"?"seconds":"opportunities";
+ const amount=n=>num(m.unit==="ms"?n/1000:n);
+ const reasons=[...new Set(m.observations.map(o=>o.reason).filter(Boolean))];
+ const exclusions=reasons.length?'<details><summary>Coverage notes</summary><ul class="signals">'+
+  reasons.map(reason=>'<li>'+esc(reason)+'</li>').join("")+'</ul></details>':"";
+ const peer=m.comparison;
+ const comparison=peer&&[peer.higher,peer.tied,peer.lower,peer.missing].every(integer)?
+  '<small>Peers’ rates · '+num(peer.higher)+' higher · '+num(peer.tied)+' tied · '+
+  num(peer.lower)+' lower · '+num(peer.missing)+' unavailable</small>':"";
+ return '<td><span class="val">'+(m.denominator&&count(m.per_100)?num(m.per_100)+' per 100':'No observable evidence')+'</span>'+
+  '<small>'+amount(m.numerator)+' / '+amount(m.denominator)+' observed '+units+'</small>'+
+  '<small>'+(m.coverage_pct===null?'Coverage unavailable':num(m.coverage_pct)+'% coverage')+' · '+
+  amount(m.excluded)+' excluded '+units+'</small>'+comparison+exclusions+'</td>';
+}
+function renderMovement(){
+ if(!movementReport)return;
+ const output=by("movement-results");
+ const hint=message=>{output.innerHTML='<p class="hint">'+esc(message)+'</p>';};
+ if(!report)return hint("Open a midfield report to link these movement measures to player profiles.");
+ const ids=movementMatchIds(movementReport), selectedMatch=by("match").value;
+ if(!ids.every(id=>report.matches.some(m=>m.match_id===id)))
+  return hint("The movement report includes matches outside this midfield report.");
+ if(!string(movementReport.competition_id)||!string(movementReport.season_id))
+  return hint("The movement report needs confirmed competition and season IDs before it can be linked.");
+ const pooled=movementReport.analysis_scope==="selected_clips_across_matches";
+ if(pooled?selectedMatch:!(selectedMatch===ids[0]||(!selectedMatch&&report.matches.length===1))){
+  return hint(pooled?"Select All report matches to view pooled movement evidence.":
+   "Select "+matchLabel(ids[0])+" to view its movement evidence.");
+ }
+ const p=selected("a"),q=selected("b"),left=movementProfile(p),right=movementProfile(q);
+ const measures=new Map([...(left?.measures||[]),...(right?.measures||[])].map(m=>[m.metric,m.label]));
+ if(!measures.size)return hint("No movement evidence matches the selected player, team, position group and match window.");
+ const header='<thead><tr><th scope="col">Measure</th><th scope="col">'+esc(p?.player_name||"Player A")+
+  '</th><th scope="col">'+esc(q?.player_name||"Player B")+'</th></tr></thead>';
+ const rows=[...measures].map(([key,label])=>'<tr><th scope="row">'+esc(label)+'</th>'+
+  movementCell(left?.measures.find(m=>m.metric===key),p)+movementCell(right?.measures.find(m=>m.metric===key),q)+'</tr>');
+ output.innerHTML='<p class="hint">'+(pooled?'Selected clips across '+ids.length+' matches':'Selected clips · '+esc(matchLabel(ids[0])))+
+  '. Rates describe observable opportunities in the video report.</p>'+
+  '<table class="table">'+header+'<tbody>'+rows.join("")+'</tbody></table>';
+}
 function render(){
+ renderMovement();
  const p=selected("a"),q=selected("b"),a=p&&scoped(p),b=q&&scoped(q),matchOnly=Boolean(by("match").value);
  by("notice").innerHTML=p&&q&&(p===q || JSON.stringify(p.scope)!==JSON.stringify(q.scope))?'<p class="notice">'+(p===q?'The same profile is selected twice.':'These profiles are from different position groups or competition-seasons. Treat the comparison as descriptive.')+'</p>':'';
  if(!a && !b){by("results").innerHTML='<section class="panel empty">No profiles match this selection.</section>';return}
@@ -226,6 +309,22 @@ by("file").addEventListener("change",async e=>{
   const data=JSON.parse(await file.text());
   if(generation===uploadGeneration){load(data,file.name);by("dataset").value="file";}
  }catch(err){if(generation===uploadGeneration)setStatus("Could not load report: "+err.message+" The previous report is still displayed.",true)}
+});
+by("movement-upload").addEventListener("click",()=>by("movement-file").click());
+by("movement-file").addEventListener("change",async e=>{
+ const file=e.target.files[0],generation=++movementUploadGeneration;e.target.value="";
+ if(!file)return;
+ const status=by("movement-file-status");
+ try{
+  if(file.size>25*1024*1024)throw Error("Choose a movement report smaller than 25 MB.");
+  const data=validateMovement(JSON.parse(await file.text()));
+  if(generation!==movementUploadGeneration)return;
+  movementReport=data;status.textContent="Loaded "+file.name+".";status.classList.remove("error");
+  renderMovement();
+ }catch(err){
+  if(generation!==movementUploadGeneration)return;
+  status.textContent=err.message;status.classList.add("error");
+ }
 });
 by("results").addEventListener("click",e=>{
  const button=e.target.closest("button[data-match]");

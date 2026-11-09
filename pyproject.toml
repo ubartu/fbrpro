@@ -11,6 +11,7 @@ dependencies = []
 
 [project.optional-dependencies]
 parquet = ["pyarrow>=14"]
+tracking = ["numpy>=1.26,<3", "opencv-python-headless>=4.10,<5"]
 
 [project.scripts]
 football-normalizer = "football_normalizer.cli:main"

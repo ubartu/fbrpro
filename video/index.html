@@ -1,64 +1,114 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FBRPRO · Video review</title>
-<style>
-:root{font:16px system-ui,sans-serif;color:#172e2a;background:#edf4ef}*{box-sizing:border-box}
-header{padding:26px max(20px,calc((100vw - 1080px)/2));background:#103733;color:white}
-h1,h2,p{margin:0 0 12px}h1{letter-spacing:-.04em}small,.hint{color:#465d56}
-main{max-width:1120px;margin:auto;padding:20px;display:grid;grid-template-columns:1.3fr 1fr;gap:16px}
-section{padding:18px;border:1px solid #cadad0;border-radius:12px;background:white}
-.stack{display:grid;align-content:start;gap:16px}label{display:grid;gap:5px;margin:9px 0;font-weight:650;font-size:.88rem}
-input,select,button,textarea{font:inherit;max-width:100%;padding:7px;border:1px solid #afc3b7;border-radius:6px;background:white}
-button{cursor:pointer;background:#176454;color:white;border:0;padding:9px 12px}button:disabled{opacity:.5;cursor:default}
-video{width:100%;background:#142c28;border-radius:6px;min-height:100px;max-height:65vh}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.error{color:#8f3225}.status{margin:10px 0;min-height:1.4em}textarea{width:100%}
-summary{cursor:pointer;font-weight:700}.wide{grid-column:1/-1}@media(max-width:740px){main{grid-template-columns:1fr}}
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Review match footage alongside player tracking, movement evidence, and event-selected clips.">
+<title>FBRPRO · Video analysis</title>
+<link rel="stylesheet" href="review.css">
 </head>
 <body>
-<header><small style="color:#c2e6d7">FBRPRO / VIDEO ANALYZER</small><h1>Match clip review</h1><p>Align the clocks, open an event-selected clip, and record what you can see.</p></header>
-<main>
-<div class="stack">
-<section><h2>1. Open footage</h2><label>Local match video<input id="video-file" type="file" accept="video/*"></label>
-<video id="video" controls playsinline preload="metadata"></video>
-<p id="video-status" class="status" role="status">Video stays on this device.</p>
-</section>
-<section><details open><summary>Align video to the match clock</summary>
-<p class="hint">Use two known moments in one uninterrupted span. Match seconds reset to zero each half. Make separate segments around edits or breaks.</p>
-<div class="grid"><label>Match ID<input id="match-id"></label><label>Video ID<input id="video-id" placeholder="e.g. tactical-wide"></label>
-<label>Half<input id="period" type="number" min="1" value="1"></label>
-<label>Segment ID<input id="segment-id" placeholder="Optional"></label>
-<label>Start match seconds<input id="ms1" type="number" min="0" step=".001"></label>
-<label>Start video seconds<input id="vs1" type="number" min="0" step=".001"></label>
-<label>End match seconds<input id="ms2" type="number" min="0" step=".001"></label>
-<label>End video seconds<input id="vs2" type="number" min="0" step=".001"></label></div>
-<div class="row"><button id="take-start">Use playhead as start</button><button id="take-end">Use playhead as end</button></div>
-<div class="row" style="margin-top:8px"><button id="add-segment">Add segment</button><button id="download-alignment">Export alignment</button></div>
-<ul id="segments"></ul><p id="alignment-status" class="status" role="status"></p>
-</details></section>
-</div>
-<div class="stack">
-<section><h2>2. Choose a clip</h2>
-<label>Clip plan JSON<input id="plan-file" type="file" accept="application/json,.json"></label>
-<p id="plan-status" class="status" role="status">Generate the clip plan from your alignment and match events.</p>
-<label>Clip<select id="clip" disabled></select></label>
-<div class="row"><button id="play" disabled>Play selected clip</button><span id="clip-time" class="hint"></span></div>
-<label>Opportunity within the clip<select id="opportunity" disabled></select></label>
-</section>
-<section><h2>3. Record evidence</h2>
-<label>Player<select id="player" disabled></select></label>
-<label>Behaviour<select id="behaviour"><option value="screening">Screening the back line</option><option value="deep_to_advanced">Deep-to-advanced run</option></select></label>
-<label>Observation<select id="observation"><option value="observed">Observed</option><option value="not_observed">Visible; behaviour not observed</option><option value="unobservable">Unobservable / uncertain</option></select></label>
-<label>Review note<textarea id="notes" rows="3" placeholder="What was visible? Where was the player?"></textarea></label>
-<div class="row"><button id="save-tag" disabled>Save observation</button><button id="export-tags" disabled>Export observations</button></div>
-<p id="tag-status" class="status" role="status"></p><ul id="tags"></ul>
-<p class="hint">Observations apply only to these clips. Save the exported JSON before closing this page.</p>
-</section>
-</div>
+<header class="masthead">
+  <div class="wrap header-inner">
+    <a href="index.html" class="brand" aria-label="FBRPRO video analysis home"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 36 36"><rect x="6" y="9" width="24" height="18" rx="2"/><path d="M18 9v18M6 14h5v8H6m24-8h-5v8h5"/><circle cx="18" cy="18" r="4"/></svg></span><strong>FBR<span>PRO</span></strong></a>
+    <span class="header-divider"></span><span class="header-section">Analysis workspace</span>
+    <span class="local-badge"><i></i> Local session</span>
+  </div>
+</header>
+<main class="wrap">
+  <section class="intro">
+    <div class="intro-copy"><span class="eyebrow"><i></i> VIDEO INTELLIGENCE</span><h1>Match analysis</h1><p>Connect the footage to the pitch. See the movements behind the numbers, then review the moments that matter.</p></div>
+    <nav class="steps" aria-label="Workflow"><a href="#session-files"><b>01</b> Load files</a><i></i><a href="#footage-title"><b>02</b> Explore</a><i></i><a href="#clips-title"><b>03</b> Review</a></nav>
+  </section>
+  <div class="inputs" id="session-files" aria-label="Session files">
+    <label class="upload"><input id="video-file" type="file" accept="video/*"><span class="upload-icon">▶</span><span><strong>Match video</strong><small id="video-name">Choose a video</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
+    <label class="upload"><input id="plan-file" type="file" accept="application/json,.json"><span class="upload-icon">≡</span><span><strong>Clip plan</strong><small id="plan-name">Optional · JSON</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
+    <label class="upload"><input id="tracking-file" type="file" accept="application/json,.json"><span class="upload-icon">⌖</span><span><strong>Player tracking</strong><small id="tracking-name">Choose a JSON report</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
+    <label class="upload"><input id="metrics-file" type="file" accept="application/json,.json"><span class="upload-icon">↗</span><span><strong>Movement metrics</strong><small id="metrics-name">Optional · JSON</small></span><span class="upload-arrow" aria-hidden="true">↗</span></label>
+  </div>
+  <p class="session-hint" id="session-summary">Files stay on this device. Start with a video or open a tracking report to replay positions without footage.</p>
+  <p id="session-status" class="session-status" role="status" hidden></p>
+  <div class="workspace">
+    <section class="panel footage-panel" aria-labelledby="footage-title">
+      <div class="panel-head"><div><span class="eyebrow">01 / FOOTAGE</span><h2 id="footage-title">Match footage</h2></div><span class="chip" id="video-clock">00:00.0</span></div>
+      <div id="video-stage" class="video-stage empty">
+        <video id="video" controls playsinline preload="metadata"></video>
+        <svg id="video-tracks" aria-hidden="true" hidden></svg>
+        <div class="stage-empty" id="video-empty"><div class="video-icon" aria-hidden="true">▷</div><strong>No video loaded</strong><span>Choose a local match video above.</span></div>
+      </div>
+      <label class="overlay-control" id="overlay-control" hidden><input id="show-boxes" type="checkbox"> Show tracking boxes</label>
+      <p id="video-status" class="status" role="status">No footage has been opened.</p>
+    </section>
+    <section class="panel pitch-panel" aria-labelledby="pitch-title">
+      <div class="panel-head"><div><span class="eyebrow">02 / TRACKING</span><h2 id="pitch-title">Pitch replay</h2></div><span id="track-chip" class="chip">Waiting for tracking</span></div>
+      <div class="pitch-stage">
+        <svg id="pitch" viewBox="-5 -5 110 74" role="img" aria-label="Top-down pitch replay of tracked players">
+          <defs><pattern id="stripes" width="20" height="64" patternUnits="userSpaceOnUse"><rect width="20" height="64" fill="#204b39"/><rect width="10" height="64" fill="#244f3e"/></pattern></defs>
+          <rect width="100" height="64" fill="url(#stripes)"/>
+          <g fill="none" stroke="#87ad94" stroke-width=".38">
+            <rect width="100" height="64"/><path d="M50 0v64M0 11h16v42H0m100-42H84v42h16M0 23h5.5v18H0m100-18h-5.5v18h5.5M0 28.4h-2v7.2h2m100-7.2h2v7.2h-2"/>
+            <circle cx="50" cy="32" r="8.7"/><path d="M16 25a8.7 8.7 0 0 1 0 14m68-14a8.7 8.7 0 0 0 0 14"/>
+            <circle cx="50" cy="32" r=".33" fill="#87ad94"/><circle cx="10.5" cy="32" r=".32" fill="#87ad94"/><circle cx="89.5" cy="32" r=".32" fill="#87ad94"/>
+          </g>
+          <g id="pitch-objects"></g>
+        </svg>
+        <div class="pitch-empty" id="pitch-empty"><strong>Player positions appear here</strong><span>Open a tracking report to start.</span></div>
+      </div>
+      <div class="timeline"><label for="timeline">Replay time</label><input id="timeline" type="range" min="0" max="0" value="0" step="1" disabled><output id="replay-time">00:00.0</output></div>
+      <div id="clip-markers" class="clip-markers" role="group" aria-label="Selected clip markers" hidden></div>
+      <p id="phase-now" class="status"></p>
+      <button type="button" class="secondary" id="first-sample" hidden>Jump to first tracked frame</button>
+      <p id="tracking-status" class="status" aria-live="off">Tracks without a calibrated position stay off the pitch.</p>
+      <div class="legend"><span><i class="legend-known"></i> Team identified</span><span><i class="legend-unknown"></i> Team unknown</span><span><i class="legend-ball"></i> Ball</span></div>
+      <details id="identity-panel" class="align" hidden>
+        <summary>Confirm player identities</summary>
+        <p class="hint">Pause on a clear frame and turn on tracking boxes. Confirm each identity from the footage and roster before exporting.</p>
+        <div class="grid"><label>Visible track<select id="identity-track"></select></label>
+          <label>Roster player<select id="identity-player"></select></label></div>
+        <div class="row"><button id="identity-save" type="button">Save identity</button><button id="identity-export" type="button" class="secondary">Export identity map</button></div>
+        <p id="identity-status" class="status" role="status"></p>
+      </details>
+    </section>
+  </div>
+  <section class="panel evidence-panel" aria-labelledby="evidence-title">
+    <div class="panel-head"><div><span class="eyebrow">03 / MOVEMENT EVIDENCE</span><h2 id="evidence-title">What the tracking shows</h2></div><span id="evidence-scope" class="chip">No report loaded</span></div>
+    <p id="metrics-status" class="status" role="status">Open a movement report for the evidence and coverage behind each measure.</p>
+    <div id="metric-cards" class="metric-grid"></div>
+  </section>
+  <div class="tools">
+    <section class="panel" aria-labelledby="clips-title">
+      <div class="panel-head"><div><span class="eyebrow">REVIEW TOOLS</span><h2 id="clips-title">Clip queue</h2></div></div>
+      <p id="plan-status" class="status" role="status">Open a clip plan to jump to selected moments in the video.</p>
+      <label>Clip<select id="clip" disabled><option>Load a clip plan first</option></select></label>
+      <div class="row"><button type="button" id="play" disabled>Play selected clip</button><span id="clip-time" class="hint"></span></div>
+      <label>Opportunity within the clip<select id="opportunity" disabled></select></label>
+      <details class="align"><summary>Align video to the match clock</summary>
+        <p class="hint">Pick two known moments in one uninterrupted span. Use a third event to check the match clock before scoring. Match seconds reset at the start of each half.</p>
+        <div class="grid">
+          <label>Match ID<input id="match-id"></label><label>Video ID<input id="video-id" placeholder="e.g. tactical-wide"></label>
+          <label>Half<input id="period" type="number" min="1" value="1"></label><label>Segment ID<input id="segment-id" placeholder="Optional"></label>
+          <label>Start match seconds<input id="ms1" type="number" min="0" step=".001"></label><label>Start video seconds<input id="vs1" type="number" min="0" step=".001"></label>
+          <label>End match seconds<input id="ms2" type="number" min="0" step=".001"></label><label>End video seconds<input id="vs2" type="number" min="0" step=".001"></label>
+          <label>Check match seconds<input id="ms3" type="number" min="0" step=".001"></label><label>Check video seconds<input id="vs3" type="number" min="0" step=".001"></label>
+        </div>
+        <div class="row"><button type="button" id="take-start" class="secondary">Use playhead as start</button><button type="button" id="take-end" class="secondary">Use playhead as end</button><button type="button" id="take-check" class="secondary">Use playhead for check</button></div>
+        <div class="row align-actions"><button type="button" id="add-segment">Add segment</button><button type="button" id="download-alignment" class="secondary">Export alignment</button></div>
+        <ul id="segments"></ul><p id="alignment-status" class="status" role="status"></p>
+      </details>
+    </section>
+    <section class="panel" aria-labelledby="review-title">
+      <div class="panel-head"><div><span class="eyebrow">ANALYST REVIEW</span><h2 id="review-title">Record an observation</h2></div></div>
+      <label>Player<select id="player" disabled><option>Load a clip plan first</option></select></label>
+      <div class="grid"><label>Behaviour<select id="behaviour"><option value="central_screening">Screening the back line</option><option value="deep_to_advanced_support">Deep-to-advanced run</option><option value="deep_passing_outlet">Deep passing outlet</option><option value="between_line_support">Available between the lines</option><option value="between_line_reception">Reception between the lines</option><option value="closing_down">Closing down the ball carrier</option></select></label>
+      <label>Observation<select id="observation"><option value="observed">Observed</option><option value="not_observed">Visible; behaviour not observed</option><option value="unobservable">Unobservable / uncertain</option></select></label></div>
+      <label>Review note<textarea id="notes" rows="3" placeholder="What was visible? Where was the player?"></textarea></label>
+      <div class="row"><button type="button" id="save-tag" disabled>Save observation</button><button type="button" id="export-tags" class="secondary" disabled>Export observations</button></div>
+      <p id="tag-status" class="status" role="status"></p><ul id="tags"></ul>
+      <p class="hint">Observations apply only to the selected clips. Export before closing this page.</p>
+    </section>
+  </div>
 </main>
 <script src="review.js"></script>
+<script src="analysis.js"></script>
 </body>
 </html>

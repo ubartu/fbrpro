@@ -188,7 +188,9 @@ python3 dashboard/build.py reports/bundesliga-relative-role-report.json \
 Open `dashboard/local.html` for the built-in dataset selector. The tracked
 `dashboard/index.html` works directly with **Open JSON report**.
 
-## Video review pilot
+## Video analyzer
 
-See [VIDEO_ANALYZER.md](VIDEO_ANALYZER.md) for the event-driven moment catcher,
-clock alignment and local clip review workflow.
+Open [Video analysis](video/index.html) to review footage, pitch tracks and
+movement evidence. See [VIDEO_ANALYZER.md](VIDEO_ANALYZER.md) for selected-clip
+tracking, movement measures, the Midfield Lab integration, and real-video
+pilot limitations.

@@ -23,6 +23,7 @@ from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
 from .video_pitch_lines import LinePitchModel
 from .video_roles import annotate_video_roles
+from .video_geometry import PitchContinuity, position_quality, reviewed_report
 
 VERSION = "fbrpro-video-tracking-v1"
 TRACK_ID_SCOPE = "pitch-v2"
@@ -609,6 +610,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=scope)
             ball_tracker = BallTracker(clip["id"], frame_width) if ball_detector else None
             camera_motion = CameraMotion(cv2, np)
+            geometry_guard = None
             if not through_eof and not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
             # Do not invent clock from frame index/FPS when the decoder has no timestamps.
@@ -676,6 +678,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                         ball_tracker.reset()
                     if isinstance(automatic_model, LinePitchModel):
                         automatic_model.reset()
+                    if geometry_guard is not None:
+                        geometry_guard.reset()
                 automatic_quality = None
                 if (pitch_model is not None or pitch_lines_model is not None) and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
@@ -690,6 +694,17 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                         cal = Calibration(segment.id, None, None, matrix, "automatic", rms, check)
                         counters["automatically_calibrated_frames"] += 1
                         automatic_quality = getattr(automatic_model, "last_quality", None)
+                geometry_quality = None
+                if img is not None:
+                    if geometry_guard is None:
+                        geometry_guard = PitchContinuity(cv2, np, length, width, clip["id"])
+                    trusted_cal = cal is not None and cal.status in ("verified", "automatic")
+                    matrix, geometry_quality = geometry_guard.update(
+                        img, video_ms, cal.matrix if trusted_cal else None,
+                        reviewed=trusted_cal and cal.status == "verified")
+                    geometry_quality["image_to_pitch"] = matrix.tolist() if matrix is not None else None
+                    if trusted_cal:
+                        cal = replace(cal, matrix=matrix) if matrix is not None else None
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
                     cv2, np, img, detector, cal, length, width)
                 if boundary and boundary["source"] == "automatic_landmarks" and automatic_quality:
@@ -703,6 +718,12 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
                 tracks = tracker.update(detections, video_ms, motion)
                 rows = [object_row(t, cal, length, width, identities) for t in tracks]
+                if geometry_guard is not None:
+                    geometry_guard.boxes = [d.box for d in detections if d.object_type == "player"]
+                for row in rows:
+                    row["position_uncertainty_m"] = position_quality(np, row, cal, automatic_quality, img.shape) if row["observed"] and img is not None else None
+                    if row["position_uncertainty_m"] is not None and geometry_quality and geometry_quality["drift_m"] is not None:
+                        row["position_uncertainty_m"] = round(row["position_uncertainty_m"]+geometry_quality["drift_m"], 3)
                 for track, row in zip(tracks, rows):
                     color = track.last.kit_color
                     if not track.missing and color is not None and color == track.kit_sample:
@@ -749,6 +770,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "calibration_fit_rms_m": cal.rms_m if cal else None,
                                "calibration_check_max_m": cal.check_max_m if cal else None,
                                "calibration_line_quality": automatic_quality,
+                               "pitch_geometry": geometry_quality,
                                "camera_cut_suspected": pending_cut,
                                "camera_motion_compensated": motion is not None,
                                "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
@@ -784,7 +806,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if pitch_lines_model:
         with Path(pitch_lines_model).open("rb") as handle:
             pitch_lines_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    return {"version": VERSION, "match_id": plan["match_id"], "video_id": plan["video_id"],
+    report = {"version": VERSION, "match_id": plan["match_id"], "video_id": plan["video_id"],
             "plan_id": plan["plan_id"], "coordinate_frame": "stadium_fixed",
             "coordinate_length_m": length, "coordinate_width_m": width,
             "dimensions_assumed": bool(calibration_data.get("dimensions_assumed", False)),
@@ -802,6 +824,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
             "kit_color_policy": "multi-frame shirt appearance groups; single-color hints remain available",
             "automatic_calibration": bool(pitch_model or pitch_lines_model),
+            "position_uncertainty_method": "marking residual + local foot-point sensitivity + camera-compensated temporal disagreement; not a confidence interval",
             "role_inference": roles,
             "sync": [{"segment_id": s.id, "status": s.sync_status,
                       "check_max_ms": s.check_max_ms} for s in aligned.values()],
@@ -810,6 +833,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                              "follow_camera": c.landmarks is not None,
                              "fit_rms_m": c.rms_m, "check_max_m": c.check_max_m} for c in calibrations],
             "clips": summaries, "frames": frames}
+    return reviewed_report(report)
 
 
 def canonical_rows(report):

@@ -337,6 +337,7 @@ function renderFrame(){
   else if(mismatch)message="Tracking is hidden until the clip plan matches the tracking report.";
   else if(!usable)message="No tracking sample at this time. Seek to a tracked clip.";
   if(!usable){
+    status("geometry-current","");
     if(lastFrame!==undefined){pitchLayer.replaceChildren();footageLayer.replaceChildren();}
     lastFrame=undefined;
     configureInferenceLegend();
@@ -350,6 +351,7 @@ function renderFrame(){
   }
   if(frame===lastFrame)return;
   lastFrame=frame;
+  if(typeof showGeometryFrame==="function")showGeometryFrame(frame);
   configureInferenceLegend(shotByFrame.get(frame));
   if(!$("identity-panel").hidden)showIdentityTracks(frame);
   const polygon=pitchPolygon(frame);
@@ -494,6 +496,7 @@ function setupTracking(data,name){
   $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames"+
     (positive(data.sample_fps)?" · "+fmt(data.sample_fps)+" fps target":""):"No frames";
   showSession();showOverlayControl();setupIdentityRoster();configureTimeline();renderTrackingCoverage();renderMetrics();
+  if(typeof setupGeometry==="function")setupGeometry();
 }
 $("tracking-file").addEventListener("change",async e=>{
   const f=e.target.files[0],request=++trackingRequest;
@@ -916,6 +919,7 @@ $("video-file").addEventListener("change",e=>{
   $("calibration-file").value="";
   if(previewFile&&previewFile!==activeVideoFile){
     tracking=undefined;previewFile=undefined;lastFrame=undefined;
+    if(typeof clearGeometry==="function")clearGeometry();
     mappedFrame=ballFrame=undefined;
     exportedPreview=undefined;
     pitchLayer.replaceChildren();footageLayer.replaceChildren();

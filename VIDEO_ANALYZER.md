@@ -65,6 +65,78 @@ python -m football_normalizer.video_calibration_benchmark /path/to/labeled-image
   --output reports/video-pilot/calibration-validation.json
 ```
 
+### Pitch orientation, coverage and spatial movement
+
+New tracking runs include camera-segment IDs, a ground-plane mapping, continuity
+checks and a local position-sensitivity estimate in metres. Fresh mappings are
+compared with the preceding map transported by image camera motion. A symmetric
+180-degree solution can be corrected within a continuous segment. Unsupported
+jumps are rejected; repeated failures reacquire a new segment. Camera cuts,
+tracking gaps and insufficient overlap do not establish orientation across views.
+
+Open **Pitch orientation and movement setup** in the movement evidence panel:
+
+1. Select a camera segment and compare it with the footage. Confirm the current
+   pitch orientation or rotate it 180 degrees. This sets the fixed pitch basis;
+   it does not determine which goal a team attacks.
+2. Assign the segment's half/period and confirm that it shows live match play.
+   Split mixed live/replay footage into separate clips before confirming a
+   segment. The checkbox is a reviewer assertion, not automatic replay detection.
+3. Set each team's attacking direction for each relevant half. Directions for
+   extra time are separate. **Apply review** updates the replay and statistics
+   without running detection again. Changes are retained in the draft when
+   switching teams or segments; apply them before exporting.
+4. Select a tracked player to see the fixed 3-by-3 pitch-zone grid, usable
+   observed time and directional displacement. **Export reviewed tracking** saves
+   the review and results in the tracking JSON; reopening it restores them.
+
+Automatic maps remain estimates even after orientation review. Position
+uncertainty is a sensitivity estimate using marking residuals, local foot-point
+pixel displacement and camera-compensated temporal disagreement; it is not a
+calibrated statistical confidence interval.
+Assumed pitch dimensions are displayed. Old reports without this metadata need
+tracking rerun; the review does not invent missing calibration evidence.
+
+Spatial calculations require two observed positions of the same track in the
+same camera segment, period and clip, with no camera cut or long sampling gap.
+They require reviewed orientation/live play, a verified or automatic projection,
+position sensitivity no greater than 3 m, and plausible interval displacement.
+These are geometry-quality checks, not player-role labels. Interpolated and
+missing positions, referee candidates and duplicate track observations are
+excluded. The export records the active quality policy.
+
+Zone percentages divide conservatively resolved zone time by usable observed
+time; time near boundaries or crossing a zone within a sample interval is
+reported separately, so zone percentages may sum to less than 100%. Coverage is
+usable time divided by contiguous observed track time, not full-match minutes.
+Player identity switches break intervals; anonymous IDs remain separate tracks.
+
+Directional movement also requires a confirmed team direction. It uses
+contiguous windows of approximately one second and shorter remaining tails.
+Only endpoint displacement exceeding the sum of endpoint sensitivity estimates
+contributes. Zero therefore means no displacement resolved above that error
+estimate. This is conservative observed displacement, not distance covered,
+speed, sprint counts or an extrapolated match total.
+
+For offline processing, supply a review JSON with `segments` keyed by the
+tracking report's `pitch_segments[].id` and `directions` keyed by period/team:
+
+```json
+{"segments":{"preview-clip:geometry:0":{"orientation":"normal","period":1,"live_play":true}},
+ "directions":{"1":{"kit:team_a":1,"kit:team_b":-1},"2":{"kit:team_a":-1,"kit:team_b":1}}}
+```
+
+```sh
+python -m football_normalizer.video_geometry tracking.json --review pitch-review.json --output tracking-reviewed.json
+```
+
+Validation: `python -m unittest discover -s tests` checks camera flow, known
+pan/zoom projections, symmetric maps, jump rejection and reacquisition, review
+gates, time weighting, uncertainty, gaps, cuts and period-specific direction.
+`node tests/video_geometry_ui.cjs` checks the setup and report interface.
+Real-video smoke reports are stored in `reports/video-pilot`. They check the
+pipeline, not independently annotated metric player-position accuracy.
+
 For dedicated ball tracking, export the
 [`ball11n.pt` football checkpoint](https://huggingface.co/boxerab/gst-python-ml-football)
 as a 1280 px single-class ONNX detector. The checkpoint is listed under

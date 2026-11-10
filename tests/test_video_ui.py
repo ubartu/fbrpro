@@ -27,6 +27,20 @@ class InMemoryHandler(video_ui.ReviewHandler):
 
 
 class ReviewServerTests(unittest.TestCase):
+    def test_geometry_review_endpoint_recalculates_without_running_detector(self):
+        tracking = {"version": "fbrpro-video-tracking-v1", "coordinate_length_m": 105,
+                    "coordinate_width_m": 68, "frames": []}
+        data = json.dumps({"tracking": tracking, "review": {}}).encode()
+        headers = {"X-FBRPRO-Video": "1", "Content-Type": "application/json"}
+        with patch.object(video_ui.video_tracking, "run") as run:
+            status, _, body = self.call("POST", "/api/geometry", headers=headers, body=data)
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(body)["spatial_summary"]["players"], [])
+            run.assert_not_called()
+        self.assertEqual(self.call("POST", "/api/geometry", body=data)[0], 403)
+        self.assertEqual(self.call("POST", "/api/geometry", headers=headers, body=b"{}")[0], 400)
+        self.assertEqual(self.call("GET", "/video/geometry.js")[0], 200)
+
     def setUp(self):
         scratch = self.enterContext(TemporaryDirectory())
         video = Path(scratch) / "sample.mp4"

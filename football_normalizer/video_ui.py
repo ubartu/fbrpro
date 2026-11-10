@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 
 from . import video, video_tracking
 from .video_inference import BACKENDS
+from .video_geometry import reviewed_report
 
 
 WEB_ROOT = Path(__file__).resolve().parent.parent
@@ -26,6 +27,7 @@ STATIC = {
     "/video/review.css": "video/review.css",
     "/video/review.js": "video/review.js",
     "/video/analysis.js": "video/analysis.js",
+    "/video/geometry.js": "video/geometry.js",
     "/dashboard/": "dashboard/index.html",
     "/dashboard/index.html": "dashboard/index.html",
 }
@@ -295,11 +297,24 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not self.same_origin():
             return
         target = urlsplit(self.path)
-        if target.path not in {"/api/track", "/api/cancel"}:
+        if target.path not in {"/api/track", "/api/cancel", "/api/geometry"}:
             self.error(HTTPStatus.NOT_FOUND, "This workbench route does not exist.")
             return
         if self.headers.get("X-FBRPRO-Video") != "1":
             self.error(HTTPStatus.FORBIDDEN, "Submit the file from the local video workbench.")
+            return
+        if target.path == "/api/geometry":
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if not 0 < size <= MAX_UPLOAD_BYTES:
+                    raise ValueError("Choose a tracking review smaller than 256 MB")
+                payload = json.loads(self.rfile.read(size))
+                if not isinstance(payload, dict):
+                    raise ValueError("Choose a tracking report and pitch review")
+                result = reviewed_report(payload.get("tracking"), payload.get("review", {}))
+                self.send_json(HTTPStatus.OK, result)
+            except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as exc:
+                self.error(HTTPStatus.BAD_REQUEST, str(exc))
             return
         if target.path == "/api/cancel":
             job = self.requested_job(target)

@@ -63,6 +63,10 @@ button:hover:not(:disabled){filter:brightness(1.1)}button.secondary{background:#
 @media(max-width:700px){.header-section,.header-divider{display:none}.header-inner{min-height:58px}.inputs{grid-template-columns:1fr 1fr}.workspace,.tools{grid-template-columns:1fr}main{padding-top:20px}.upload{padding:8px;grid-template-columns:30px minmax(0,1fr) 10px}.upload-icon{width:30px;height:30px}}
 @media(max-width:370px){.upload{grid-template-columns:minmax(0,1fr) 10px}.upload-icon{display:none}}
 .metric-picker{grid-column:1/-1}.metric-picker label{flex:0 1 280px}.metric-evidence{margin-top:8px;border-top:1px solid var(--line);padding-top:7px}.metric-evidence summary{font-size:.73rem}.evidence-row{margin-top:8px;padding-top:7px;border-top:1px solid var(--line)}
+.zone-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;background:#173a2d;padding:5px;border-radius:9px;margin-top:10px}
+.zone-grid div{min-height:68px;padding:9px;text-align:center;color:#f1fbf4;border:1px solid #b4d5bc55;display:grid;place-content:center}
+.zone-grid small{font-size:.7rem;color:#c7ddcd}.zone-grid strong{font-size:1.2rem}
+#spatial-results[hidden],#geometry-panel[hidden]{display:none}
 .start-panel{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 22px;margin-bottom:14px}
 .start-panel h2{margin:.2rem 0;font-size:1.12rem}
 .start-panel p{margin:.25rem 0 0}

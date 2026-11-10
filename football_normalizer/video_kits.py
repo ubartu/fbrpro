@@ -7,6 +7,7 @@ KIT_SEPARATION = 25
 MIN_SAMPLES = 3
 MIN_SPAN_MS = 400
 MIN_PLAYERS = 3
+MAX_EXTRA_KIT_FRACTION = .35
 
 
 def shirt_appearance(cv2, np, frame, box):
@@ -89,7 +90,12 @@ def team_groups(samples, reference):
         if repeated(co_visible):
             modes.append((center, co_visible))
     if len(modes) > 2:
-        return {}, reference, "multiple_recurring_kits"
+        modes.sort(key=lambda mode: len(mode[1]), reverse=True)
+        shared = modes[0][1] & modes[1][1]
+        extra = set().union(*(times for _, times in modes[2:]))
+        if not shared or len(shared & extra) >= MAX_EXTRA_KIT_FRACTION*len(shared):
+            return {}, reference, "multiple_recurring_kits"
+        modes = modes[:2]
     if len(modes) < 2 or not repeated(modes[0][1] & modes[1][1]):
         return {}, reference, "two_co_visible_kits_unconfirmed"
     centers = np.stack([mode[0] for mode in modes])

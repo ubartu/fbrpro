@@ -23,6 +23,39 @@ def annotate(frames, **options):
 
 class VideoRoleTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_brief_extra_shirt_cluster_does_not_remove_both_teams(self):
+        import numpy as np
+
+        frames = team_frames(total=30)
+        for index, frame in enumerate(frames):
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                  else [115, 125, 125], 3)
+            if index < 4:
+                frame["objects"].extend(person(f"extra-{i}", "black",
+                                               _shirt_appearance=np.tile([25, 128, 132], 3))
+                                        for i in range(4))
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "inferred")
+        for frame in frames:
+            for row in frame["objects"]:
+                track = row["track_id"]
+                expected = "kit:team_a" if track.startswith("a-") else "kit:team_b" if track.startswith("b-") else None
+                self.assertEqual(row["inferred_team"], expected)
+
+        competing = team_frames(total=9)
+        for frame in competing:
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                  else [115, 125, 125], 3)
+            frame["objects"].extend(person(f"extra-{i}", "black",
+                                           _shirt_appearance=np.tile([25, 128, 132], 3))
+                                    for i in range(4))
+        shot, = annotate(competing, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "multiple_recurring_kits")
+        self.assertTrue(all(row["inferred_team"] is None for f in competing for row in f["objects"]))
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
     def test_shirt_groups_survive_an_unavailable_pitch_projection(self):
         import numpy as np
 

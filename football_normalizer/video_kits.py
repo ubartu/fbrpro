@@ -51,10 +51,7 @@ def distance(np, appearances, center):
     return np.linalg.norm(differences, axis=(-2, -1)) / 3
 
 
-def team_groups(samples, reference):
-    """Return two co-visible groups, or abstain if the shirt evidence is weak."""
-    import numpy as np
-
+def shirt_profiles(np, samples):
     profiles = {}
     for track, rows in samples.items():
         if not repeated(rows):
@@ -65,6 +62,14 @@ def team_groups(samples, reference):
         times = {ms for ms, keep in zip(rows, inliers) if keep}
         if repeated(times) and len(times) >= .65*len(rows):
             profiles[track] = (np.median(values[inliers], axis=0), times)
+    return profiles
+
+
+def team_groups(samples, reference):
+    """Return two co-visible groups, or abstain if the shirt evidence is weak."""
+    import numpy as np
+
+    profiles = shirt_profiles(np, samples)
     if not profiles:
         return {}, reference, "two_co_visible_kits_unconfirmed"
     tracks = list(profiles)

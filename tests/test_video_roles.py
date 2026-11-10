@@ -23,6 +23,80 @@ def annotate(frames, **options):
 
 class VideoRoleTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_distinct_touchline_kit_is_a_referee_candidate_and_preserves_players(self):
+        import numpy as np
+
+        frames = team_frames()
+        for index, frame in enumerate(frames):
+            frame["calibration_status"] = "automatic"
+            for row in frame["objects"]:
+                row["projection_status"] = "automatic"
+                row["_shirt_appearance"] = np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                  else [115, 125, 125], 3)
+            frame["objects"][0]["y_m"] = 1
+            frame["objects"].extend([
+                person("assistant", "yellow", y=1, projection_status="automatic",
+                       _shirt_appearance=np.tile([115, 115, 202], 3)),
+                person("keeper", "blue", x=4, y=34, projection_status="automatic",
+                       _shirt_appearance=np.tile([60, 100, 100], 3)),
+                person("briefly-wide", "yellow", y=1 if index < 3 else 30, projection_status="automatic",
+                       _shirt_appearance=np.tile([115, 115, 202], 3)),
+            ])
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual([r["track_id"] for r in shot["referees"]], ["assistant"])
+        for frame in frames:
+            winger = frame["objects"][0]
+            self.assertEqual(winger["inferred_team"], "kit:team_a")
+            self.assertIsNone(winger["inferred_role"])
+            assistant, keeper, passing = frame["objects"][-3:]
+            self.assertEqual(assistant["inferred_role"], "probable_referee")
+            self.assertIsNone(assistant["inferred_team"])
+            self.assertIsNone(keeper["inferred_role"])
+            self.assertIsNone(passing["inferred_role"])
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_touchline_group_does_not_block_learning_both_teams(self):
+        import numpy as np
+
+        frames = team_frames()
+        for frame in frames:
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                  else [115, 125, 125], 3)
+            frame["objects"].extend(
+                person(f"official-{i}", "yellow", y=1, _shirt_appearance=np.tile([115, 115, 202], 3))
+                for i in range(3))
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "inferred")
+        self.assertEqual(len(shot["referees"]), 3)
+        self.assertTrue(all(row["inferred_team"] for frame in frames for row in frame["objects"][:6]))
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_referee_candidates_need_pitch_evidence_and_respect_reviewed_identities(self):
+        import numpy as np
+
+        frames = team_frames()
+        for frame in frames:
+            frame["calibration_status"] = "uncalibrated"
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                  else [115, 125, 125], 3)
+            frame["objects"].append(
+                person("reviewed", "yellow", y=1, player_id="known-player", team_id="known-team",
+                       _shirt_appearance=np.tile([115, 115, 202], 3)))
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["referees"], [])
+        for frame in frames:
+            frame["calibration_status"] = "verified"
+            frame["objects"][-1]["_shirt_appearance"] = np.tile([115, 115, 202], 3)
+            for row in frame["objects"][:6]:
+                row["_shirt_appearance"] = np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                  else [115, 125, 125], 3)
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["referees"], [])
+        self.assertEqual(frames[0]["objects"][-1]["player_id"], "known-player")
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
     def test_brief_extra_shirt_cluster_does_not_remove_both_teams(self):
         import numpy as np
 

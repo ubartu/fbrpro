@@ -4,7 +4,7 @@ from bisect import bisect_left
 from collections import Counter, defaultdict
 from math import isfinite
 
-from .video_kits import team_groups
+from .video_kits import KIT_RADIUS, distance, shirt_profiles, team_groups
 
 
 VERSION = "fbrpro-video-role-hints-v1"
@@ -12,9 +12,9 @@ MIN_KIT_TRACKS = 3
 MIN_KIT_SAMPLES = 3
 MIN_KIT_SPAN_MS = 400
 MAX_KIT_PROPAGATION_MS = 500
-MIN_GOAL_SAMPLES = 5
-MIN_GOAL_SPAN_MS = 800
-MAX_GOAL_GAP_MS = 750
+MIN_ROLE_SAMPLES = 5
+MIN_ROLE_SPAN_MS = 800
+MAX_ROLE_GAP_MS = 750
 
 
 def _number(value):
@@ -104,7 +104,7 @@ def _goal_depth(frame, row, length, width):
 def _goal_candidate(samples, length, width):
     positions = [(time_ms, _goal_depth(frame, row, length, width), row) for time_ms, frame, row in samples]
     checked = [position for _, position, _ in positions if position is not None]
-    if len(checked) < MIN_GOAL_SAMPLES:
+    if len(checked) < MIN_ROLE_SAMPLES:
         return None
 
     for index, end in enumerate(("low_x", "high_x")):
@@ -119,7 +119,7 @@ def _goal_candidate(samples, length, width):
         run = []
         near_times = {time_ms for time_ms, _ in near}
         for time_ms, position, row in positions:
-            if position is None or time_ms not in near_times or (run and time_ms-run[-1][0] > MAX_GOAL_GAP_MS):
+            if position is None or time_ms not in near_times or (run and time_ms-run[-1][0] > MAX_ROLE_GAP_MS):
                 if run:
                     runs.append(run)
                 run = []
@@ -129,7 +129,7 @@ def _goal_candidate(samples, length, width):
                 run.append((time_ms, row))
         if run:
             runs.append(run)
-        qualifying = [r for r in runs if len(r) >= MIN_GOAL_SAMPLES and r[-1][0]-r[0][0] >= MIN_GOAL_SPAN_MS]
+        qualifying = [r for r in runs if len(r) >= MIN_ROLE_SAMPLES and r[-1][0]-r[0][0] >= MIN_ROLE_SPAN_MS]
         if qualifying:
             best = max(qualifying, key=lambda r: r[-1][0]-r[0][0])
             return end, [sample for r in qualifying for sample in r], {
@@ -153,6 +153,68 @@ def _shot_tracks(frames):
                 if isinstance(track, str) and track:
                     tracks[track].append((time_ms, frame, row))
     return tracks
+
+
+def _touchline_evidence(samples, shirt_times, length, width):
+    checked = []
+    for stamp, frame, row in samples:
+        x, y = row.get("x_m"), row.get("y_m")
+        if (_observed_player(row) and frame.get("calibration_status") in ("verified", "automatic")
+                and row.get("projection_status") in ("verified", "automatic")
+                and _number(x) and _number(y) and 0 <= x <= length and 0 <= y <= width):
+            checked.append((stamp, y))
+    if len(checked) < MIN_ROLE_SAMPLES:
+        return None
+    for side in ("low_y", "high_y"):
+        times = [stamp for stamp, y in checked
+                 if (y if side == "low_y" else width-y) <= width*.03 and stamp in shirt_times]
+        if len(times) < .85*len(checked):
+            continue
+        runs, run = [], []
+        for stamp in times:
+            if run and stamp-run[-1] > MAX_ROLE_GAP_MS:
+                runs.append(run)
+                run = []
+            run.append(stamp)
+        runs.append(run)
+        qualifying = [run for run in runs if _repeat(run, MIN_ROLE_SAMPLES, MIN_ROLE_SPAN_MS)]
+        if not qualifying:
+            continue
+        evidence = sorted(stamp for run in qualifying for stamp in run)
+        return side, evidence, max(run[-1]-run[0] for run in qualifying)
+    return None
+
+
+def _annotate_referees(tracks, reference, length, width):
+    """Flag distinct shirts with sustained touchline evidence for review."""
+    if reference is None:
+        return []
+    import numpy as np
+
+    profiles = shirt_profiles(np, _shirt_samples(tracks))
+    candidates = []
+    for track, (appearance, shirt_times) in profiles.items():
+        samples = tracks[track]
+        if any(row.get("player_id") or row.get("team_id") or row.get("inferred_team")
+               or row.get("inferred_role") == "probable_goalkeeper" for _, _, row in samples):
+            continue
+        if distance(np, reference, appearance).min() <= KIT_RADIUS+6:
+            continue
+        evidence = _touchline_evidence(samples, shirt_times, length, width)
+        if evidence is None:
+            continue
+        side, times, span = evidence
+        annotated = 0
+        for stamp, _, row in samples:
+            if (_shirt_visible(row) and stamp in shirt_times
+                    and _nearest_sample(times, stamp) <= MAX_KIT_PROPAGATION_MS):
+                row["inferred_role"] = "probable_referee"
+                row["inferred_referee_role"] = "assistant"
+                annotated += 1
+        candidates.append({"track_id": track, "inferred_role": "probable_referee",
+                           "touchline": side, "annotated_observations": annotated,
+                           "observed_span_ms": span})
+    return candidates
 
 
 def _annotate_shot(frames, length, width, usable_pitch, reference, shirt_groups):
@@ -211,13 +273,15 @@ def _annotate_shot(frames, length, width, usable_pitch, reference, shirt_groups)
             row["inferred_role"] = "probable_goalkeeper"
             row["inferred_goal_end"] = end
         confirmed.append({"track_id": track, "inferred_goal_end": end, "kit_color_hint": hue, **summary})
+    referees = _annotate_referees(tracks, reference, length, width) if shirt_groups else []
     return {"video_start_ms": frames[0]["video_time_ms"], "video_end_ms": frames[-1]["video_time_ms"],
             "team_status": team_status,
             "kit_groups": [{"inferred_team": f"kit:{group}", "kit_color_hint": None if shirt_groups else group,
                             "annotated_observations": counts[group]} for group in pair],
             "goalkeeper_status": ("inferred" if confirmed else "ambiguous" if ambiguous else
                                   "verified_pitch_required" if not usable_pitch else "insufficient_evidence"),
-            "goalkeepers": confirmed, "ambiguous_goal_ends": sorted(ambiguous)}, reference
+            "goalkeepers": confirmed, "ambiguous_goal_ends": sorted(ambiguous),
+            "referees": referees}, reference
 
 
 def annotate_video_roles(frames, *, coordinate_length_m, coordinate_width_m,
@@ -230,7 +294,7 @@ def annotate_video_roles(frames, *, coordinate_length_m, coordinate_width_m,
     for frame in frames:
         for row in frame["objects"]:
             if row.get("object_type") == "player":
-                row.update(inferred_team=None, inferred_role=None, inferred_goal_end=None)
+                row.update(inferred_team=None, inferred_role=None, inferred_goal_end=None, inferred_referee_role=None)
         clips[frame["clip_id"]].append(frame)
 
     grouped_shots = {}
@@ -248,7 +312,13 @@ def annotate_video_roles(frames, *, coordinate_length_m, coordinate_width_m,
     if shirt_groups:
         for shots in grouped_shots.values():
             for shot in shots:
-                _, reference, _ = team_groups(_shirt_samples(_shot_tracks(shot)), None)
+                tracks = _shot_tracks(shot)
+                samples = _shirt_samples(tracks)
+                _, reference, status = team_groups(samples, None)
+                if status == "multiple_recurring_kits":
+                    central = {track: appearances for track, appearances in samples.items()
+                               if _touchline_evidence(tracks[track], set(appearances), length, width) is None}
+                    _, reference, _ = team_groups(central, None)
                 if reference is not None:
                     break
             if reference is not None:
@@ -267,5 +337,6 @@ def annotate_video_roles(frames, *, coordinate_length_m, coordinate_width_m,
     return {"version": VERSION,
             "team_policy": "Shirt groups established in a wide view and reused across the video's shots; pitch projection is assessed separately.",
             "goalkeeper_policy": "Distinct kit and repeated verified positions near the same goal end; defended team is unknown.",
+            "referee_policy": "Distinct shirt and repeated touchline positions identify assistant referee candidates.",
             "goalkeeper_pitch_dimensions_verified": usable_pitch and not dimensions_assumed,
             "goalkeeper_reference_dimensions": usable_pitch and dimensions_assumed, "clips": summaries}

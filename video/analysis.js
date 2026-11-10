@@ -114,9 +114,18 @@ function nearestFrame(frames,ms){
 function probableKeeper(o){
   return o.inferred_role==="probable_goalkeeper";
 }
+function probableReferee(o){
+  return o.inferred_role==="probable_referee"||o.object_type==="referee";
+}
+function refereeHidden(o){
+  return probableReferee(o)&&!$("show-referees").checked;
+}
+function replayNumber(o){
+  return probableReferee(o)?"R":playerNumbers.get(o.track_id);
+}
 function teamColour(o){
   return o.object_type==="ball"?"#fff180":teamColours.get(o.team_id)||
-    (probableKeeper(o)?"#d6baff":inferredTeams.get(o.inferred_team)?.colour||"#e1ae5e");
+    (probableReferee(o)?"#d1d9df":probableKeeper(o)?"#d6baff":inferredTeams.get(o.inferred_team)?.colour||"#e1ae5e");
 }
 function trackLabel(o){
   if(o.object_type==="ball")return "Ball";
@@ -125,7 +134,7 @@ function trackLabel(o){
   const roster=clipPlan?.identity_roster||clipPlan?.players;
   const name=roster?.find(p=>p.id===player)?.name||player;
   return [number?"#"+number:"",name,o.track_id,o.team_id||inferredTeams.get(o.inferred_team)?.title,
-    probableKeeper(o)?"GK?":""].filter(Boolean).join(" · ");
+    probableReferee(o)?"Referee candidate":probableKeeper(o)?"GK?":""].filter(Boolean).join(" · ");
 }
 function numberText(number,x,y,size){
   const t=svg("text",{x,y,fill:"#10291f","text-anchor":"middle","dominant-baseline":"central",
@@ -150,6 +159,7 @@ function configureInferenceLegend(shot){
     if(group)$("label-kit-"+letter).textContent=group.title;
   }
   $("legend-gk").hidden=!shot?.keeper;
+  $("legend-referee").hidden=!shot?.referee||!$("show-referees").checked;
   $("inference-hint").hidden=!shot;
   if(shot)$("inference-hint").textContent=entries.length||shot.keeper
     ?"Shirt groups and goalkeeper markers are estimates. Confirm team and player identities separately."
@@ -166,6 +176,8 @@ function pitchBoundaryVerified(frame){
 }
 function summarizeCandidates(frame,polygon){
   const parts=[];
+  const hiddenReferees=frame.objects.filter(o=>o.observed&&refereeHidden(o)).length;
+  if(hiddenReferees)parts.push(hiddenReferees+" referee candidate"+(hiddenReferees===1?"":"s")+" hidden");
   if(validMs(frame.person_candidates))parts.push(fmt(frame.person_candidates)+" person candidate"+(frame.person_candidates===1?"":"s"));
   if(validMs(frame.off_pitch_candidates))parts.push(fmt(frame.off_pitch_candidates)+" rejected outside pitch");
   if(validMs(frame.pitch_unavailable_candidates))parts.push(fmt(frame.pitch_unavailable_candidates)+" withheld for missing outline");
@@ -203,6 +215,7 @@ function drawOverlay(frame,polygon){
       "vector-effect":"non-scaling-stroke"}));
   }
   for(const o of frame.objects){
+    if(refereeHidden(o))continue;
     const b=o.bbox_xyxy;
     if(!o.observed||o.estimated||o.visibility==="missing"||!Array.isArray(b)||b.length!==4||!b.every(finite))continue;
     const [x,y,right,bottom]=b;
@@ -216,7 +229,7 @@ function drawOverlay(frame,polygon){
     }else{
       frag.append(svg("rect",{x,y,width:right-x,height:bottom-y,fill:"none",stroke:fill,"stroke-width":1.4,
         "vector-effect":"non-scaling-stroke"}));
-      const number=playerNumbers.get(o.track_id);
+      const number=replayNumber(o);
       if(number){
         const size=tracking.frame_width*.014, ry=size*.63;
         const rx=Math.max(ry,size*(.29*number.length+.26));
@@ -237,7 +250,7 @@ function showIdentityTracks(frame){
   const select=$("identity-track");
   const prior=select.value;
   select.replaceChildren();
-  const observed=frame?.objects.filter(o=>o.observed&&!o.estimated&&o.object_type==="player")||[];
+  const observed=frame?.objects.filter(o=>o.observed&&!o.estimated&&o.object_type==="player"&&!refereeHidden(o))||[];
   for(const o of observed){
     const hint=!o.team_id&&!inferredTeams.has(o.inferred_team)&&o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
     option(select,o.track_id,trackLabel(o)+hint);
@@ -346,6 +359,7 @@ function renderFrame(){
   let plotted=0, missing=0, uncalibrated=0, unidentified=0;
   const length=tracking.coordinate_length_m,width=tracking.coordinate_width_m;
   for(const o of frame.objects){
+    if(refereeHidden(o))continue;
     if(o.visibility==="missing"||!o.observed||o.estimated){missing++;continue;}
     if(!finite(o.x_m)||!finite(o.y_m)||o.x_m<0||o.x_m>length||o.y_m<0||o.y_m>width){uncalibrated++;continue;}
     plotted++;
@@ -356,7 +370,7 @@ function renderFrame(){
     const circle=svg("circle",{cx:x,cy:y,r:ball?1.05:1.52,fill:teamColour(o),stroke:"#103226","stroke-width":".34"});
     const title=svg("title",{});title.textContent=trackLabel(o);
     group.append(title,circle);
-    const number=playerNumbers.get(o.track_id);
+    const number=replayNumber(o);
     if(!ball&&number)group.append(numberText(number,x,y,Math.min(1.8,3.9/number.length)));
     frag.append(group);
   }
@@ -419,6 +433,9 @@ $("first-ball").onclick=()=>seek(ballFrame?.video_time_ms);
 $("show-boxes").addEventListener("change",()=>{
   showOverlayControl();lastFrame=undefined;footageLayer.replaceChildren();queueFrame();
 });
+$("show-referees").addEventListener("change",()=>{
+  lastFrame=undefined;inferenceShot=undefined;queueFrame();
+});
 video.addEventListener("timeupdate",queueFrame);
 video.addEventListener("play",queueFrame);
 video.addEventListener("pause",queueFrame);
@@ -438,7 +455,7 @@ function hasObservedBall(frame){
 }
 function hasMappedPlayers(frame){
   return ["verified","automatic"].includes(frame.calibration_status)&&frame.objects.some(o=>o.object_type==="player"&&
-    o.observed&&o.projection_status===frame.calibration_status&&finite(o.x_m)&&finite(o.y_m));
+    o.observed&&!probableReferee(o)&&o.projection_status===frame.calibration_status&&finite(o.x_m)&&finite(o.y_m));
 }
 function setupTracking(data,name){
   tracking=data; lastFrame=undefined;lastMessage=undefined;
@@ -446,21 +463,24 @@ function setupTracking(data,name){
   ballFrame=data.frames.find(hasObservedBall);
   pitchLayer.replaceChildren();footageLayer.replaceChildren();
   const teams=new Set(), shots=new Map();
+  let hasReferees=false;
   playerNumbers=new Map();
   shotByFrame=new WeakMap();
   reviewedIdentities=new Map();
   for(const f of data.frames){
     let shot=shots.get(f.clip_id);
     if(!shot||f.camera_cut_suspected){
-      shot={groups:new Set(),keeper:false};
+      shot={groups:new Set(),keeper:false,referee:false};
       shots.set(f.clip_id,shot);
     }
     shotByFrame.set(f,shot);
     for(const o of f.objects)if(o.object_type==="player"){
-      if(o.observed&&!o.estimated&&o.visibility!=="missing"&&!playerNumbers.has(o.track_id))
+      if(o.observed&&!o.estimated&&o.visibility!=="missing"&&!probableReferee(o)&&!playerNumbers.has(o.track_id))
         playerNumbers.set(o.track_id,String(playerNumbers.size+1));
       if(typeof o.inferred_team==="string"&&/^kit:[a-z_]+$/.test(o.inferred_team))shot.groups.add(o.inferred_team);
       shot.keeper ||= probableKeeper(o);
+      shot.referee ||= probableReferee(o);
+      hasReferees ||= probableReferee(o);
       if(o.team_id){
         teams.add(o.team_id);
         reviewedIdentities.set(o.track_id,o.player_id?{player_id:o.player_id,team_id:o.team_id}:{team_id:o.team_id});
@@ -468,6 +488,7 @@ function setupTracking(data,name){
     }
   }
   teamColours=new Map([...teams].sort().map((team,i)=>[team,palette[i%palette.length]]));
+  $("referee-control").hidden=!hasReferees;
   replayMs=data.frames[0]?.video_time_ms??0;
   $("tracking-name").textContent=name;
   $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames"+

@@ -145,6 +145,10 @@ calibration when tracking that exact demo file again.
   people detected on the pitch, with camera projection checked separately.
   Unclear tracks and officials can remain
   unassigned. The groups are separate from the reviewed lineup.
+- A distinct shirt and sustained positions along the same touchline identify
+  a referee candidate. These candidates are hidden from the footage overlay
+  and pitch replay by default. **Show referee candidates** reveals them with
+  an **R** marker for review. Confirmed roster identities take precedence.
 - **GK?** marks a probable goalkeeper when a distinct shirt and a continuous
   run of verified positions near one goal support the hint. An ordinary
   outline does not establish where the goals are. Upload previews without

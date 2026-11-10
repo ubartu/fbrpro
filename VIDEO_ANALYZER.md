@@ -105,9 +105,11 @@ calibration when tracking that exact demo file again.
 - A second look at overlapping, enlarged parts of the pitch helps detect
   smaller players in wide shots. Color agreement can help preserve a track.
   Occlusion, camera cuts and very small players can still produce gaps.
-- Two distinct, repeatedly co-visible shirt colors establish kit groups in
-  the current shot. Unclear or conflicting shirts remain unassigned. The
-  groups do not change the reviewed lineup and can leave officials anonymous.
+- Several clear torso crops describe each player's shirt, including dark and
+  mixed colours. Two distinct groups that repeatedly appear together establish
+  **Team A** and **Team B**. A later shot keeps the same labels when the two
+  kits match the earlier ones. Unclear tracks and officials can remain
+  unassigned. The groups are separate from the reviewed lineup.
 - **GK?** marks a probable goalkeeper when a distinct shirt and a continuous
   run of verified positions near one goal support the hint. An ordinary
   outline does not establish where the goals are. Upload previews without

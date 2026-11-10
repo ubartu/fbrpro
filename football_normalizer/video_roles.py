@@ -4,6 +4,8 @@ from bisect import bisect_left
 from collections import Counter, defaultdict
 from math import isfinite
 
+from .video_kits import team_groups
+
 
 VERSION = "fbrpro-video-role-hints-v1"
 MIN_KIT_TRACKS = 3
@@ -130,7 +132,7 @@ def _goal_candidate(samples, length, width):
     return None
 
 
-def _annotate_shot(frames, length, width, usable_pitch):
+def _annotate_shot(frames, length, width, usable_pitch, reference, shirt_groups):
     usable_pitch = usable_pitch and any(f.get("calibration_status") == "verified" for f in frames)
     tracks = defaultdict(list)
     for frame in frames:
@@ -142,20 +144,43 @@ def _annotate_shot(frames, length, width, usable_pitch):
                     tracks[track].append((time_ms, frame, row))
 
     colors = {track: _stable_color(samples) for track, samples in tracks.items()}
-    pair, team_status = _kit_pair(tracks, colors)
+    if shirt_groups:
+        appearances = {track: {ms: row["_shirt_appearance"] for ms, _, row in rows
+                               if "_shirt_appearance" in row and row.get("projection_status") != "off_pitch"}
+                       for track, rows in tracks.items()}
+        assignments, next_reference, team_status = team_groups(appearances, reference)
+        pair = ("team_a", "team_b") if assignments else ()
+        reviewed = defaultdict(set)
+        for track, (group, _) in assignments.items():
+            reviewed[group].update(row["team_id"] for _, _, row in tracks[track] if row.get("team_id"))
+        a, b = reviewed["team_a"], reviewed["team_b"]
+        if len(a) > 1 or len(b) > 1 or a & b:
+            assignments, pair, team_status = {}, (), "reviewed_teams_conflict_with_kits"
+        else:
+            reference = next_reference
+    else:
+        pair, team_status = _kit_pair(tracks, colors)
+        assignments = {track: (hue, times) for track, (hue, times) in colors.items() if hue in pair}
     counts = Counter()
     keepers = defaultdict(list)
+    team_hues = {colors[track][0] for track in assignments}
     if pair:
         for track, samples in tracks.items():
-            hue, times = colors[track]
-            if hue in pair:
+            hue, _ = colors[track]
+            if track in assignments:
+                group, times = assignments[track]
+                ordered_times = sorted(times)
                 for time_ms, _, row in samples:
+                    if shirt_groups:
+                        consistent = time_ms in times or "_shirt_appearance" not in row
+                    else:
+                        consistent = row.get("kit_color_hint") in (None, hue)
                     if (_observed_player(row) and row.get("projection_status") != "off_pitch"
-                            and row.get("kit_color_hint") in (None, hue)
-                            and _nearest_sample(times, time_ms) <= MAX_KIT_PROPAGATION_MS):
-                        row["inferred_team"] = f"kit:{hue}"
-                        counts[hue] += 1
-            elif hue and usable_pitch:
+                            and consistent
+                            and _nearest_sample(ordered_times, time_ms) <= MAX_KIT_PROPAGATION_MS):
+                        row["inferred_team"] = f"kit:{group}"
+                        counts[group] += 1
+            elif hue and hue not in team_hues and usable_pitch:
                 candidate = _goal_candidate(samples, length, width)
                 if candidate:
                     end, evidence, summary = candidate
@@ -174,15 +199,15 @@ def _annotate_shot(frames, length, width, usable_pitch):
         confirmed.append({"track_id": track, "inferred_goal_end": end, "kit_color_hint": hue, **summary})
     return {"video_start_ms": frames[0]["video_time_ms"], "video_end_ms": frames[-1]["video_time_ms"],
             "team_status": team_status,
-            "kit_groups": [{"inferred_team": f"kit:{hue}", "kit_color_hint": hue,
-                            "annotated_observations": counts[hue]} for hue in pair],
+            "kit_groups": [{"inferred_team": f"kit:{group}", "kit_color_hint": None if shirt_groups else group,
+                            "annotated_observations": counts[group]} for group in pair],
             "goalkeeper_status": ("inferred" if confirmed else "ambiguous" if ambiguous else
                                   "verified_pitch_required" if not usable_pitch else "insufficient_evidence"),
-            "goalkeepers": confirmed, "ambiguous_goal_ends": sorted(ambiguous)}
+            "goalkeepers": confirmed, "ambiguous_goal_ends": sorted(ambiguous)}, reference
 
 
 def annotate_video_roles(frames, *, coordinate_length_m, coordinate_width_m,
-                         coordinate_frame="stadium_fixed", dimensions_assumed=False):
+                         coordinate_frame="stadium_fixed", dimensions_assumed=False, shirt_groups=False):
     """Annotate review hints in place and summarize supporting shots, without writing canonical IDs."""
     length, width = coordinate_length_m, coordinate_width_m
     usable_pitch = (coordinate_frame == "stadium_fixed"
@@ -195,18 +220,24 @@ def annotate_video_roles(frames, *, coordinate_length_m, coordinate_width_m,
         clips[frame["clip_id"]].append(frame)
 
     summaries = []
+    reference = None
     for clip_id, clip_frames in clips.items():
         shot = []
         shots = []
         for frame in sorted(clip_frames, key=lambda frame: frame["video_time_ms"]):
             if shot and frame.get("camera_cut_suspected"):
-                shots.append(_annotate_shot(shot, length, width, usable_pitch))
+                summary, reference = _annotate_shot(shot, length, width, usable_pitch, reference, shirt_groups)
+                shots.append(summary)
                 shot = []
             shot.append(frame)
-        shots.append(_annotate_shot(shot, length, width, usable_pitch))
+        summary, reference = _annotate_shot(shot, length, width, usable_pitch, reference, shirt_groups)
+        shots.append(summary)
+        for frame in clip_frames:
+            for row in frame["objects"]:
+                row.pop("_shirt_appearance", None)
         summaries.append({"clip_id": clip_id, "shots": shots})
     return {"version": VERSION,
-            "team_policy": "Two recurring co-visible shirt groups per shot; officials can remain ambiguous.",
+            "team_policy": "Two co-visible shirt appearance groups, matched across shots when supported.",
             "goalkeeper_policy": "Distinct kit and repeated verified positions near the same goal end; defended team is unknown.",
             "goalkeeper_pitch_dimensions_verified": usable_pitch and not dimensions_assumed,
             "goalkeeper_reference_dimensions": usable_pitch and dimensions_assumed, "clips": summaries}

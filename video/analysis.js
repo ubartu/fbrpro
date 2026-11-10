@@ -130,17 +130,22 @@ function configureInferenceLegend(shot){
   inferenceShot=shot;
   const entries=[...(shot?.groups||[])].sort().slice(0,2);
   inferredTeams=new Map(entries.map((key,i)=>{
-    const letter=i===0?"A":"B", colour=i===0?"#7ad8f6":"#ff99bd";
-    const name=key.slice(4).replaceAll("_"," ");
-    return [key,{letter,colour,name}];
+    const letter=key==="kit:team_a"?"A":key==="kit:team_b"?"B":i===0?"A":"B";
+    const colour=letter==="A"?"#7ad8f6":"#ff99bd";
+    const inferred=/^kit:team_[ab]$/.test(key);
+    const name=inferred?"Team "+letter:key.slice(4).replaceAll("_"," ");
+    return [key,{letter,colour,name,title:inferred?name:"Kit "+letter+" · "+name,inferred}];
   }));
-  for(const [i,letter] of ["a","b"].entries()){
-    const group=inferredTeams.get(entries[i]);
+  for(const letter of ["a","b"]){
+    const group=[...inferredTeams.values()].find(g=>g.letter.toLowerCase()===letter);
     $("legend-kit-"+letter).hidden=!group;
-    if(group)$("label-kit-"+letter).textContent="Kit "+group.letter+" · "+group.name;
+    if(group)$("label-kit-"+letter).textContent=group.title;
   }
   $("legend-gk").hidden=!shot?.keeper;
-  $("inference-hint").hidden=!entries.length&&!shot?.keeper;
+  $("inference-hint").hidden=!shot;
+  if(shot)$("inference-hint").textContent=entries.length||shot.keeper
+    ?"Shirt groups and goalkeeper markers are estimates. Confirm team and player identities separately."
+    :"Team groups need clear, repeated views of both kits in the same shot.";
 }
 function pitchPolygon(frame){
   const points=frame.pitch_boundary?.polygon_xy;
@@ -218,7 +223,7 @@ function showIdentityTracks(frame){
   const observed=frame?.objects.filter(o=>o.observed&&!o.estimated&&o.object_type==="player")||[];
   for(const o of observed){
     const group=inferredTeams.get(o.inferred_team);
-    const hint=group?" · "+group.name+" kit group":o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
+    const hint=group?" · "+group.name+(group.inferred?"":" kit group"):o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
     option(select,o.track_id,markerLabel(o,o.track_id)+hint);
   }
   select.value=observed.some(o=>o.track_id===prior)?prior:observed[0]?.track_id||"";

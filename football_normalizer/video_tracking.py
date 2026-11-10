@@ -18,6 +18,7 @@ from .video import VERSION as PLAN_VERSION, segments_from
 from .video_auto_calibration import PitchModel
 from .video_ball import BallDetector, BallTracker
 from .video_inference import load_inference
+from .video_kits import shirt_appearance
 from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
 from .video_roles import annotate_video_roles
@@ -673,6 +674,10 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     color = track.last.kit_color
                     if not track.missing and color is not None and color == track.kit_sample:
                         row["kit_color_hint"] = color
+                    if row["observed"] and row["object_type"] == "player" and track.last.confidence >= .35:
+                        appearance = shirt_appearance(cv2, np, img, track.last.box)
+                        if appearance is not None:
+                            row["_shirt_appearance"] = appearance
                 if ball_tracker:
                     candidates = [Detection("ball", score, box)
                                   for score, box in ball_detector.detect(img, boundary)]
@@ -731,7 +736,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if set(identities) - observed_ids:
         raise ValueError("Reviewed identity map includes tracks not observed in this run. Regenerate it for the current report.")
     roles = annotate_video_roles(frames, coordinate_length_m=length, coordinate_width_m=width,
-                                 dimensions_assumed=bool(calibration_data.get("dimensions_assumed", False)))
+                                 dimensions_assumed=bool(calibration_data.get("dimensions_assumed", False)),
+                                 shirt_groups=True)
     with Path(video_path).open("rb") as handle:
         source_hash = hashlib.file_digest(handle, "sha256").hexdigest()
     with Path(model).open("rb") as handle:
@@ -755,7 +761,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
             "tracker": "camera_compensated_motion_iou_kit",
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
-            "kit_color_policy": "review hint from two agreeing torso samples",
+            "kit_color_policy": "multi-frame shirt appearance groups; single-color hints remain available",
             "automatic_calibration": bool(pitch_model),
             "role_inference": roles,
             "sync": [{"segment_id": s.id, "status": s.sync_status,

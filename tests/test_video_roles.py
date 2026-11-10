@@ -1,3 +1,4 @@
+import importlib.util
 import unittest
 
 from football_normalizer.video_roles import annotate_video_roles
@@ -21,6 +22,64 @@ def annotate(frames, **options):
 
 
 class VideoRoleTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_appearance_groups_keep_team_labels_across_camera_cuts(self):
+        import numpy as np
+
+        def appearance(light, a, b):
+            return np.tile([light, a, b], 3)
+
+        frames = []
+        for i in range(10):
+            second_shot = i >= 5
+            kits = [("red", appearance(58 if second_shot else 49, 163, 145)),
+                    ("green", appearance(49 if second_shot else 58, 88, 159))]
+            if second_shot:
+                kits.reverse()
+            rows = [person(f"{i//5}-{name}-{j}", None, _shirt_appearance=crop)
+                    for name, crop in kits for j in range(3)]
+            rows.append(person("official", "yellow", _shirt_appearance=appearance(115, 115, 202)))
+            frames.append({"clip_id": "clip-a", "video_time_ms": i*100, "calibration_status": "verified",
+                           "camera_cut_suspected": i == 5, "objects": rows})
+
+        shots = annotate(frames, shirt_groups=True)
+        self.assertEqual([shot["team_status"] for shot in shots], ["inferred", "inferred"])
+        for frame in frames:
+            for row in frame["objects"]:
+                track = row["track_id"]
+                expected = "kit:team_a" if "-red-" in track else "kit:team_b" if "-green-" in track else None
+                self.assertEqual(row["inferred_team"], expected)
+                self.assertNotIn("_shirt_appearance", row)
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_single_shirt_appearance_does_not_force_a_team_split(self):
+        import numpy as np
+
+        frames = team_frames()
+        for frame in frames:
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = np.tile([65, 153, 140], 3)
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "two_co_visible_kits_unconfirmed")
+        self.assertTrue(all(row["inferred_team"] is None for frame in frames for row in frame["objects"]))
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_dark_keeper_kit_is_not_grouped_by_lightness_alone(self):
+        import numpy as np
+
+        red = np.array([38, 125, 133, 54, 131, 136, 69, 137, 139])
+        white = np.array([94, 122, 121, 116, 125, 125, 132, 129, 129])
+        keeper = np.array([52, 114, 114, 67, 122, 123, 84, 128, 131])
+        frames = team_frames()
+        for frame in frames:
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = red if row["track_id"].startswith("a-") else white
+            frame["objects"].append(person("keeper", "blue", x=4, _shirt_appearance=keeper))
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "inferred")
+        self.assertEqual(shot["goalkeeper_status"], "inferred")
+        self.assertTrue(all(f["objects"][-1]["inferred_team"] is None for f in frames))
+
     def test_two_stable_kits_dont_force_official_into_team_or_change_reviewed_identity(self):
         frames = team_frames()
         for frame in frames:

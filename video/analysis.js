@@ -4,6 +4,7 @@ const SVG = "http://www.w3.org/2000/svg";
 const pitchLayer = $("pitch-objects");
 const footageLayer = $("video-tracks");
 let tracking, metrics;
+let playerNumbers = new Map();
 let teamColours = new Map();
 let inferredTeams = new Map();
 let shotByFrame = new WeakMap(), inferenceShot;
@@ -117,13 +118,20 @@ function teamColour(o){
   return o.object_type==="ball"?"#fff180":teamColours.get(o.team_id)||
     (probableKeeper(o)?"#d6baff":inferredTeams.get(o.inferred_team)?.colour||"#e1ae5e");
 }
-function markerLabel(o, name){
+function trackLabel(o){
   if(o.object_type==="ball")return "Ball";
-  const group=inferredTeams.get(o.inferred_team);
-  const labels=[name||o.player_id||o.track_id];
-  if(group&&!o.team_id)labels.push(group.letter);
-  if(probableKeeper(o))labels.push("GK?");
-  return labels.join(" · ");
+  const number=playerNumbers.get(o.track_id);
+  const player=reviewedIdentities.get(o.track_id)?.player_id||o.player_id;
+  const roster=clipPlan?.identity_roster||clipPlan?.players;
+  const name=roster?.find(p=>p.id===player)?.name||player;
+  return [number?"#"+number:"",name,o.track_id,o.team_id||inferredTeams.get(o.inferred_team)?.title,
+    probableKeeper(o)?"GK?":""].filter(Boolean).join(" · ");
+}
+function numberText(number,x,y,size){
+  const t=svg("text",{x,y,fill:"#10291f","text-anchor":"middle","dominant-baseline":"central",
+    "font-size":size,"font-weight":800});
+  t.textContent=number;
+  return t;
 }
 function configureInferenceLegend(shot){
   if(inferenceShot===shot)return;
@@ -134,7 +142,7 @@ function configureInferenceLegend(shot){
     const colour=letter==="A"?"#7ad8f6":"#ff99bd";
     const inferred=/^kit:team_[ab]$/.test(key);
     const name=inferred?"Team "+letter:key.slice(4).replaceAll("_"," ");
-    return [key,{letter,colour,name,title:inferred?name:"Kit "+letter+" · "+name,inferred}];
+    return [key,{letter,colour,title:inferred?name:"Kit "+letter+" · "+name}];
   }));
   for(const letter of ["a","b"]){
     const group=[...inferredTeams.values()].find(g=>g.letter.toLowerCase()===letter);
@@ -184,7 +192,7 @@ function showOverlayControl(){
 }
 function drawOverlay(frame,polygon){
   if(footageLayer.hasAttribute("hidden"))return;
-  const frag=document.createDocumentFragment();
+  const frag=document.createDocumentFragment(), badges=document.createDocumentFragment();
   if(polygon){
     const verified=pitchBoundaryVerified(frame);
     frag.append(svg("polygon",{points:polygon.map(p=>p.join(",")).join(" "),fill:"#75e2bc",
@@ -205,12 +213,18 @@ function drawOverlay(frame,polygon){
     }else{
       frag.append(svg("rect",{x,y,width:right-x,height:bottom-y,fill:"none",stroke:fill,"stroke-width":1.4,
         "vector-effect":"non-scaling-stroke"}));
+      const number=playerNumbers.get(o.track_id);
+      if(number){
+        const size=tracking.frame_width*.014, ry=size*.63;
+        const rx=Math.max(ry,size*(.29*number.length+.26));
+        const cx=Math.min(tracking.frame_width-rx,Math.max(rx,(x+right)/2));
+        const cy=Math.max(ry,y-ry-2);
+        badges.append(svg("ellipse",{cx,cy,rx,ry,fill,stroke:"#10291f","stroke-width":1,
+          "vector-effect":"non-scaling-stroke"}),numberText(number,cx,cy,size));
+      }
     }
-    const t=svg("text",{x,y:Math.max(10,y-4),fill,stroke:"#15392b","stroke-width":"2",
-      "paint-order":"stroke","font-size":tracking.frame_width*.012,"font-weight":"700"});
-    t.textContent=markerLabel(o);
-    frag.append(t);
   }
+  frag.append(badges);
   footageLayer.replaceChildren(frag);
 }
 function syncIdentityPlayer(){
@@ -222,9 +236,8 @@ function showIdentityTracks(frame){
   select.replaceChildren();
   const observed=frame?.objects.filter(o=>o.observed&&!o.estimated&&o.object_type==="player")||[];
   for(const o of observed){
-    const group=inferredTeams.get(o.inferred_team);
-    const hint=group?" · "+group.name+(group.inferred?"":" kit group"):o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
-    option(select,o.track_id,markerLabel(o,o.track_id)+hint);
+    const hint=!o.team_id&&!inferredTeams.has(o.inferred_team)&&o.kit_color_hint?" · "+o.kit_color_hint+" kit hint":"";
+    option(select,o.track_id,trackLabel(o)+hint);
   }
   select.value=observed.some(o=>o.track_id===prior)?prior:observed[0]?.track_id||"";
   $("identity-save").disabled=!select.value;
@@ -338,14 +351,10 @@ function renderFrame(){
     const ball=o.object_type==="ball";
     const group=svg("g",{});
     const circle=svg("circle",{cx:x,cy:y,r:ball?1.05:1.52,fill:teamColour(o),stroke:"#103226","stroke-width":".34"});
-    const title=svg("title",{});title.textContent=markerLabel(o)+(o.team_id?" · "+o.team_id:"");
-    circle.append(title);group.append(circle);
-    if(!ball){
-      const t=svg("text",{x,y:y-2.0,"text-anchor":"middle",fill:"#f6fff6","font-size":"1.8","font-weight":"650","paint-order":"stroke",stroke:"#15392b","stroke-width":".32"});
-      const name=clipPlan?.players?.find(p=>p.id===o.player_id)?.name;
-      t.textContent=markerLabel(o,name);
-      group.append(t);
-    }
+    const title=svg("title",{});title.textContent=trackLabel(o);
+    group.append(title,circle);
+    const number=playerNumbers.get(o.track_id);
+    if(!ball&&number)group.append(numberText(number,x,y,Math.min(1.8,3.9/number.length)));
     frag.append(group);
   }
   pitchLayer.replaceChildren(frag);
@@ -434,6 +443,7 @@ function setupTracking(data,name){
   ballFrame=data.frames.find(hasObservedBall);
   pitchLayer.replaceChildren();footageLayer.replaceChildren();
   const teams=new Set(), shots=new Map();
+  playerNumbers=new Map();
   shotByFrame=new WeakMap();
   reviewedIdentities=new Map();
   for(const f of data.frames){
@@ -444,6 +454,8 @@ function setupTracking(data,name){
     }
     shotByFrame.set(f,shot);
     for(const o of f.objects)if(o.object_type==="player"){
+      if(o.observed&&!o.estimated&&o.visibility!=="missing"&&!playerNumbers.has(o.track_id))
+        playerNumbers.set(o.track_id,String(playerNumbers.size+1));
       if(typeof o.inferred_team==="string"&&/^kit:[a-z_]+$/.test(o.inferred_team))shot.groups.add(o.inferred_team);
       shot.keeper ||= probableKeeper(o);
       if(o.team_id){

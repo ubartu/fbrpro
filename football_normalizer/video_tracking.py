@@ -21,6 +21,7 @@ from .video_inference import load_inference
 from .video_kits import shirt_appearance
 from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
+from .video_pitch_lines import LinePitchModel
 from .video_roles import annotate_video_roles
 
 VERSION = "fbrpro-video-tracking-v1"
@@ -443,17 +444,35 @@ def calibrated_boundary(cv2, np, shape, calibration, length, width):
     h, w = shape[:2]
     inverse = np.linalg.inv(calibration.matrix)
     projected = np.array([(0, 0, 1), (length, 0, 1), (length, width, 1), (0, width, 1)]) @ inverse.T
-    depth = projected[:, 2]
-    if np.any(np.abs(depth) < 1e-9) or np.min(depth)*np.max(depth) < 0:
-        return None  # A full-pitch corner falls across the camera horizon.
-    corners = projected[:, :2] / depth[:, None]
-    if not np.isfinite(corners).all() or np.abs(corners).max() > 100*max(w, h):
+    reference = calibration.project((w/2, h*.8))
+    if reference is None or not np.isfinite(projected).all():
         return None
-    frame = np.array([(0, 0), (w-1, 0), (w-1, h-1), (0, h-1)], dtype=np.float32)
-    area, polygon = cv2.intersectConvexConvex(corners.astype(np.float32), frame)
-    if area <= 0 or polygon is None:
+    reference_depth = inverse[2] @ (*reference, 1)
+    if abs(reference_depth) < 1e-9:
         return None
-    return polygon.reshape(-1, 2).round(2).tolist()
+    projected *= 1 if reference_depth > 0 else -1
+    # Clip before dividing by depth. Off-screen pitch corners can cross the
+    # horizon even while the visible field has a usable ground-plane mapping.
+    planes = ((0, 0, 1), (1, 0, 0), (-1, 0, w-1), (0, 1, 0), (0, -1, h-1))
+    for plane in planes:
+        distances = projected @ plane
+        kept = []
+        for index, (point, distance) in enumerate(zip(projected, distances)):
+            next_index = (index+1) % len(projected)
+            next_point, next_distance = projected[next_index], distances[next_index]
+            if distance >= 0:
+                kept.append(point)
+            if distance*next_distance < 0:
+                kept.append(point+(next_point-point)*distance/(distance-next_distance))
+        if len(kept) < 3:
+            return None
+        projected = np.asarray(kept)
+    if np.any(projected[:, 2] <= 1e-9):
+        return None
+    polygon = projected[:, :2]/projected[:, 2, None]
+    if not np.isfinite(polygon).all() or cv2.contourArea(polygon.astype(np.float32)) <= 0:
+        return None
+    return polygon.clip([0, 0], [w-1, h-1]).round(2).tolist()
 
 
 def pitch_detections(cv2, np, frame, detector, calibration, length, width):
@@ -515,7 +534,7 @@ def small_frame(cv2, frame):
 
 def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=DEFAULT_SAMPLE_FPS,
         confidence=.35, max_error_m=2.0, identity_map=None, through_eof=False, on_progress=None,
-        pitch_model=None, ball_model=None, inference_backend="opencv", inference_cache=None):
+        pitch_model=None, ball_model=None, inference_backend="opencv", inference_cache=None, pitch_lines_model=None):
     """Return a tracking manifest and pitch replay observations for selected clips."""
     if not isinstance(plan, dict) or plan.get("version") != PLAN_VERSION:
         raise ValueError("Expected a versioned fbrpro clip plan")
@@ -561,7 +580,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if through_eof and (len(windows) != 1 or windows[0][0] != 0 or
                         windows[0][3].sync_status != "preview"):
         raise ValueError("Full video tracking needs one video-only window starting at zero")
-    scope = f"{TRACK_ID_SCOPE}-ball" if ball_model else TRACK_ID_SCOPE
+    scope = f"{TRACK_ID_SCOPE}-lines" if pitch_lines_model else TRACK_ID_SCOPE
+    if ball_model:
+        scope = f"{scope}-ball"
     if sample_fps != 5:
         rate = str(float(sample_fps)).removesuffix(".0")
         scope = f"{scope}-fps{rate}"
@@ -583,6 +604,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         frames, summaries = [], []
         observed_ids = set()
         for start, end, clip, segment in windows:
+            if isinstance(automatic_model, LinePitchModel):
+                automatic_model.reset()
             tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=scope)
             ball_tracker = BallTracker(clip["id"], frame_width) if ball_detector else None
             camera_motion = CameraMotion(cv2, np)
@@ -651,18 +674,28 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     camera_motion.reset()
                     if ball_tracker:
                         ball_tracker.reset()
-                if pitch_model is not None and (cal is None or cal.status != "verified"):
+                    if isinstance(automatic_model, LinePitchModel):
+                        automatic_model.reset()
+                automatic_quality = None
+                if (pitch_model is not None or pitch_lines_model is not None) and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
-                        automatic_model = PitchModel(cv2, np, pitch_model, length, width,
-                                                     inference_backend=inference_backend,
-                                                     inference_cache=inference_cache)
-                    fit = automatic_model.fit(img)
+                        model_class = LinePitchModel if pitch_lines_model else PitchModel
+                        model_options = {"landmark_model": pitch_model} if pitch_lines_model else {}
+                        automatic_model = model_class(cv2, np, pitch_lines_model or pitch_model, length, width,
+                                                      inference_backend=inference_backend,
+                                                      inference_cache=inference_cache, **model_options)
+                    fit = automatic_model.fit(img, video_ms) if isinstance(automatic_model, LinePitchModel) else automatic_model.fit(img)
                     if fit is not None:
                         matrix, rms, check = fit
                         cal = Calibration(segment.id, None, None, matrix, "automatic", rms, check)
                         counters["automatically_calibrated_frames"] += 1
+                        automatic_quality = getattr(automatic_model, "last_quality", None)
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
                     cv2, np, img, detector, cal, length, width)
+                if boundary and boundary["source"] == "automatic_landmarks" and automatic_quality:
+                    boundary["source"] = {"semantic_lines_flow": "tracked_pitch_lines",
+                                          "line_checked_landmarks": "line_checked_landmarks"}.get(
+                                              automatic_quality["method"], "automatic_pitch_lines")
                 if ball_detector:
                     detections = [d for d in detections if d.object_type == "player"]
                 counters["off_pitch_candidates"] += off_pitch
@@ -715,6 +748,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "calibration_status": cal.status if cal else "uncalibrated",
                                "calibration_fit_rms_m": cal.rms_m if cal else None,
                                "calibration_check_max_m": cal.check_max_m if cal else None,
+                               "calibration_line_quality": automatic_quality,
                                "camera_cut_suspected": pending_cut,
                                "camera_motion_compensated": motion is not None,
                                "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
@@ -746,6 +780,10 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if ball_model:
         with Path(ball_model).open("rb") as handle:
             ball_model_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+    pitch_lines_hash = None
+    if pitch_lines_model:
+        with Path(pitch_lines_model).open("rb") as handle:
+            pitch_lines_hash = hashlib.file_digest(handle, "sha256").hexdigest()
     return {"version": VERSION, "match_id": plan["match_id"], "video_id": plan["video_id"],
             "plan_id": plan["plan_id"], "coordinate_frame": "stadium_fixed",
             "coordinate_length_m": length, "coordinate_width_m": width,
@@ -757,12 +795,13 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                           "pitch": automatic_model.engine.description() if automatic_model else None,
                           "ball": ball_detector.engine.description() if ball_detector else None},
             "ball_model_sha256": ball_model_hash,
+            "pitch_lines_model_sha256": pitch_lines_hash,
             "ball_tracking": "dedicated" if ball_detector else "generic",
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
             "tracker": "camera_compensated_motion_iou_kit",
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
             "kit_color_policy": "multi-frame shirt appearance groups; single-color hints remain available",
-            "automatic_calibration": bool(pitch_model),
+            "automatic_calibration": bool(pitch_model or pitch_lines_model),
             "role_inference": roles,
             "sync": [{"segment_id": s.id, "status": s.sync_status,
                       "check_max_ms": s.check_max_ms} for s in aligned.values()],
@@ -819,6 +858,7 @@ def main(argv=None):
     parser.add_argument("--sample-fps", type=float, default=DEFAULT_SAMPLE_FPS)
     parser.add_argument("--confidence", type=float, default=.35)
     parser.add_argument("--ball-model", type=Path, help="1280 px single-class ball ONNX model")
+    parser.add_argument("--pitch-lines-model", type=Path, help="SoccerNet 29-class pitch line ONNX model")
     parser.add_argument("--max-error-m", type=float, default=2)
     parser.add_argument("--identity-map", type=Path, help="JSON object mapping reviewed track IDs to player/team IDs")
     parser.add_argument("--tracking-jsonl", type=Path, help="Optional normalized export of reviewed players and projected ball")
@@ -832,7 +872,7 @@ def main(argv=None):
         report = run(args.video, read(args.plan), args.model, read(args.calibration),
                      clip_ids=args.clip_ids, sample_fps=args.sample_fps, confidence=args.confidence,
                      max_error_m=args.max_error_m, identity_map=read(args.identity_map) if args.identity_map else None,
-                     ball_model=args.ball_model)
+                     ball_model=args.ball_model, pitch_lines_model=args.pitch_lines_model)
         with args.output.open("x", encoding="utf-8") as handle:
             json.dump(report, handle, ensure_ascii=False, indent=2, allow_nan=False)
             handle.write("\n")

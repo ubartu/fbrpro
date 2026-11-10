@@ -32,6 +32,39 @@ and put it beside the person detector, or pass `--pitch-model /path/to/football-
 The model card lists the checkpoint under AGPL-3.0. The model runs locally
 and is loaded only when a sampled frame needs an automatic estimate.
 
+For semantic field localization, use the published checkpoint and
+`resources/mean.npy` and `resources/std.npy` from
+[SoccerNet calibration](https://github.com/SoccerNet/sn-calibration).
+Export in an environment with PyTorch, Torchvision and ONNX installed.
+
+```sh
+python -m football_normalizer.video_export_pitch_lines soccer_pitch_segmentation.pth \
+  --mean mean.npy --std std.npy --output football-pitch-lines.onnx
+```
+
+Put the export beside the person detector or pass
+`--pitch-lines-model /path/to/football-pitch-lines.onnx`. It takes precedence
+over the landmark model for automatic estimates. The model identifies
+semantic pitch markings. The fitter uses straight lines and checks additional
+markings before accepting a ground-plane mapping. When that fit is unavailable,
+the landmark model can supply a mapping if the detected semantic markings
+independently support it. Across adjacent frames,
+camera motion can carry that mapping for up to two samples while current
+painted lines still support it. Cuts, long gaps and failed checks force a new
+estimate. Reviewed manual calibration takes precedence.
+Export reviewed identity maps from a run using the same pitch model and
+sampling rate as the run that applies them.
+
+To compare with the landmark model on SoccerNet's labeled images, use the
+benchmark below. It reports ground-marking point errors and availability,
+including the paired subset where both methods returned a mapping.
+
+```sh
+python -m football_normalizer.video_calibration_benchmark /path/to/labeled-images \
+  --landmark-model football-pitch-detection.onnx --line-model football-pitch-lines.onnx \
+  --output reports/video-pilot/calibration-validation.json
+```
+
 For dedicated ball tracking, export the
 [`ball11n.pt` football checkpoint](https://huggingface.co/boxerab/gst-python-ml-football)
 as a 1280 px single-class ONNX detector. The checkpoint is listed under

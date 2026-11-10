@@ -171,6 +171,9 @@ function summarizeCandidates(frame,polygon){
   if(validMs(frame.pitch_unavailable_candidates))parts.push(fmt(frame.pitch_unavailable_candidates)+" withheld for missing outline");
   status("candidate-status",parts.join(" · "));
   const boundary=polygon?(pitchBoundaryVerified(frame)?"Pitch outline · Verified camera calibration":
+    frame.pitch_boundary?.source==="automatic_pitch_lines"?"Pitch outline · SoccerNet line estimate":
+    frame.pitch_boundary?.source==="tracked_pitch_lines"?"Pitch outline · Camera-followed line estimate":
+    frame.pitch_boundary?.source==="line_checked_landmarks"?"Pitch outline · Line-checked landmark estimate":
     frame.pitch_boundary?.source==="automatic_landmarks"?"Pitch outline · Automatic landmark estimate":"Pitch outline · Estimated from footage"):
     "pitch_boundary_status" in frame||"pitch_boundary" in frame?"Pitch outline unavailable in this frame.":"";
   status("boundary-status",boundary);

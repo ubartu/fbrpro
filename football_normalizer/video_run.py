@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
-from . import video, video_inference, video_kits, video_metrics, video_motion, video_pitch, video_roles, video_tracking
+from . import video, video_inference, video_kits, video_metrics, video_motion, video_pitch, video_pitch_lines, video_roles, video_tracking
 from .export import parquet
 
 
@@ -49,6 +49,9 @@ def run(args):
     identities = read(args.identity_map) if args.identity_map else {}
     options = {"clip_ids": sorted(set(args.clip or [])), "sample_fps": args.sample_fps,
                "confidence": args.confidence, "max_error_m": args.max_error_m}
+    line_model = getattr(args, "pitch_lines_model", None)
+    if line_model is not None:
+        options["pitch_lines_model"] = str(line_model)
     cv2, np = video_tracking.vision()
     source, model = file_hash(args.video), file_hash(args.model)
     tracking_inputs = {
@@ -59,6 +62,8 @@ def run(args):
         "camera_motion_code": file_hash(Path(video_motion.__file__)),
         "pitch_code": file_hash(Path(video_pitch.__file__)),
         "kit_code": file_hash(Path(video_kits.__file__)),
+        "pitch_lines_code": file_hash(Path(video_pitch_lines.__file__)),
+        "pitch_lines_model": file_hash(line_model) if line_model is not None else None,
         "role_inference_code": file_hash(Path(video_roles.__file__)),
         "alignment_code": file_hash(Path(video.__file__)), "opencv": cv2.__version__,
         "numpy": np.__version__, **options,
@@ -124,6 +129,7 @@ def main(argv=None):
         parser.add_argument("--" + arg, type=Path)
     parser.add_argument("--clip", action="append", help="Only track this clip ID (repeatable)")
     parser.add_argument("--sample-fps", type=float, default=video_tracking.DEFAULT_SAMPLE_FPS)
+    parser.add_argument("--pitch-lines-model", type=Path, help="SoccerNet pitch line ONNX model for automatic calibration")
     parser.add_argument("--confidence", type=float, default=.35)
     parser.add_argument("--max-error-m", type=float, default=2)
     parser.add_argument("--parquet", action="store_true", help="Export nonempty canonical tracking as Parquet")

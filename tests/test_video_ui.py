@@ -36,7 +36,7 @@ class ReviewServerTests(unittest.TestCase):
         self.server = SimpleNamespace(
             hosts={"127.0.0.1:8765"}, model=Path(scratch) / "model.onnx", pitch_model=None,
             inference_backend="auto", inference_cache={}, ball_model=None,
-            sample_fps=video_ui.video_tracking.DEFAULT_SAMPLE_FPS,
+            sample_fps=video_ui.video_tracking.DEFAULT_SAMPLE_FPS, pitch_lines_model=None,
             demo={"video": video, "tracking": tracking}, demo_calibration=None, job=Lock(), active_job=None)
 
     def call(self, method, path, *, headers=None, body=None):

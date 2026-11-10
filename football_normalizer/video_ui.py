@@ -129,10 +129,12 @@ class FullVideoJob:
 
 class ReviewServer(ThreadingHTTPServer):
     def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None, *,
-                 inference_backend="auto", ball_model=None, sample_fps=video_tracking.DEFAULT_SAMPLE_FPS):
+                 inference_backend="auto", ball_model=None, sample_fps=video_tracking.DEFAULT_SAMPLE_FPS,
+                 pitch_lines_model=None):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
         self.pitch_model = pitch_model
+        self.pitch_lines_model = pitch_lines_model
         self.ball_model = ball_model
         self.sample_fps = sample_fps
         self.inference_backend = inference_backend
@@ -268,7 +270,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                                            "max_full_upload_bytes": MAX_FULL_UPLOAD_BYTES,
                                            "max_full_video_ms": MAX_VIDEO_MS,
                                            "max_calibration_header": MAX_CALIBRATION_HEADER,
-                                           "automatic_calibration": self.server.pitch_model is not None,
+                                           "automatic_calibration": self.server.pitch_model is not None or self.server.pitch_lines_model is not None,
                                            "dedicated_ball_tracking": self.server.ball_model is not None,
                                            "sample_fps": self.server.sample_fps,
                                            "inference_backend": self.server.inference_backend})
@@ -380,6 +382,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     calibration = calibration_for_window(calibration, plan, start, MAX_VIDEO_MS if full else end)
                 if self.server.pitch_model is not None:
                     options["pitch_model"] = self.server.pitch_model
+                if self.server.pitch_lines_model is not None:
+                    options["pitch_lines_model"] = self.server.pitch_lines_model
                 if self.server.ball_model is not None:
                     options["ball_model"] = self.server.ball_model
                 options.update(inference_backend=self.server.inference_backend,
@@ -424,6 +428,7 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--model", required=True, type=Path, help="OpenCV Zoo YOLOX-s ONNX weights")
     parser.add_argument("--pitch-model", type=Path, help="32-landmark, 640 px football pose ONNX model")
+    parser.add_argument("--pitch-lines-model", type=Path, help="SoccerNet 29-class pitch line ONNX model")
     parser.add_argument("--ball-model", type=Path, help="Single-class, 1280 px football ball ONNX model")
     parser.add_argument("--sample-fps", type=float, default=video_tracking.DEFAULT_SAMPLE_FPS,
                         help="Tracking samples per second (default: %(default)g)")
@@ -437,6 +442,9 @@ def main(argv=None):
     sibling_model = args.model.with_name("football-pitch-detection.onnx")
     if args.pitch_model is None and sibling_model.is_file():
         args.pitch_model = sibling_model
+    sibling_lines = args.model.with_name("football-pitch-lines.onnx")
+    if args.pitch_lines_model is None and sibling_lines.is_file():
+        args.pitch_lines_model = sibling_lines
     sibling_ball = args.model.with_name("football-ball-detection.onnx")
     if args.ball_model is None and sibling_ball.is_file():
         args.ball_model = sibling_ball
@@ -450,7 +458,7 @@ def main(argv=None):
         parser.error("Choose a port between 1 and 65535.")
     if not 0 < args.sample_fps <= 30:
         parser.error("Choose a sampling rate greater than zero and at most 30 fps.")
-    models = tuple(path for path in (args.model, args.pitch_model, args.ball_model) if path is not None)
+    models = tuple(path for path in (args.model, args.pitch_model, args.ball_model, args.pitch_lines_model) if path is not None)
     if not all(path.is_file() for path in (*models, *demo.values())):
         parser.error("The model and any supplied demo paths must be readable files.")
     if not (WEB_ROOT / STATIC["/video/"]).is_file():
@@ -462,7 +470,7 @@ def main(argv=None):
             video_tracking.calibration_from(calibration, 2)
         with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model,
                           inference_backend=args.inference_backend, ball_model=args.ball_model,
-                          sample_fps=args.sample_fps) as server:
+                          sample_fps=args.sample_fps, pitch_lines_model=args.pitch_lines_model) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:

@@ -71,8 +71,13 @@ starting the local app or running the tracking commands to use the previous
 rate. Reviewed identity maps must be reapplied at the rate used to export them.
 
 Both modes draw the pitch outline and on-pitch detections over the footage and
-can save a tracking report. With the landmark model available, the app
-estimates positions using the visible pitch markings. It checks the spread
+can save a tracking report. **Movement Evidence** shows how many sampled
+frames from the current video contain people, the ball and usable player pitch
+positions. Jump from each card to its first matching frame. Open
+`video-metrics.json` from the aligned fixture workflow to review per-player
+behaviour measures. With the
+landmark model available, the app estimates positions using the visible pitch
+markings. It checks the spread
 and agreement of the landmarks and leaves the pitch empty where the view
 does not support a mapping. **Jump to mapped frame** opens a usable frame.
 Estimates use reference pitch dimensions by default. For reviewed positions,

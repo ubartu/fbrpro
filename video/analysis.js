@@ -452,7 +452,7 @@ function setupTracking(data,name){
   $("tracking-name").textContent=name;
   $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames"+
     (positive(data.sample_fps)?" · "+fmt(data.sample_fps)+" fps target":""):"No frames";
-  showSession();showOverlayControl();setupIdentityRoster();configureTimeline();renderMetrics();
+  showSession();showOverlayControl();setupIdentityRoster();configureTimeline();renderTrackingCoverage();renderMetrics();
 }
 $("tracking-file").addEventListener("change",async e=>{
   const f=e.target.files[0],request=++trackingRequest;
@@ -465,6 +465,10 @@ $("tracking-file").addEventListener("change",async e=>{
 
 const states={observed:"Observed",not_observed:"Visible but not observed",unobservable:"Unobservable",partial:"Partial coverage"};
 const groupNames={defensive:"Defensive midfield",central:"Central midfield",attacking:"Attacking midfield"};
+function seekEvidence(ms){
+  seek(ms);
+  $(Number.isFinite(video.duration)?"footage-title":"pitch-title").scrollIntoView?.({block:"nearest"});
+}
 function evidencePicker(controls,id,name,entries,value,onChange){
   const label=node("label",null,name);
   const select=node("select");
@@ -474,10 +478,49 @@ function evidencePicker(controls,id,name,entries,value,onChange){
   select.onchange=()=>{onChange(select.value);renderMetrics();$(id)?.focus();};
   label.append(select);controls.append(label);
 }
+function renderTrackingCoverage(){
+  const cards=$("tracking-coverage");
+  const frames=tracking?.frames||[];
+  const mismatch=getMismatch(tracking,clipPlan);
+  cards.replaceChildren();
+  cards.hidden=!frames.length;
+  if(!frames.length)return;
+  const coverage=[
+    {label:"People detected",matches:f=>f.objects.some(o=>o.object_type==="player"&&o.observed&&!o.estimated)},
+    {label:"Ball detected",matches:hasObservedBall},
+    {label:"Player positions on pitch",matches:hasMappedPlayers},
+  ];
+  for(const {label,matches} of coverage){
+    let count=0, first;
+    for(const frame of frames){
+      if(!matches(frame))continue;
+      count++; first??=frame.video_time_ms;
+    }
+    const card=node("article","metric-card");
+    card.append(node("h3",null,label),node("p","metric-value",fmt(count)+" / "+fmt(frames.length)),
+      node("small",null,"Sampled frames"));
+    if(!mismatch&&validMs(first)){
+      const button=node("button","secondary","Jump to first");
+      button.type="button";
+      button.setAttribute("aria-label","Jump to first frame with "+label.toLowerCase());
+      button.onclick=()=>seekEvidence(first);
+      card.append(button);
+    }
+    cards.append(card);
+  }
+}
 function renderMetrics(){
   const cards=$("metric-cards");
   cards.replaceChildren();
-  if(!metrics)return;
+  if(!metrics){
+    $("evidence-scope").textContent=tracking?"Tracking coverage":"No report loaded";
+    status("metrics-status",tracking
+      ?(!tracking.frames.length?"This tracking report has no sampled frames. ":
+        getMismatch(tracking,clipPlan)?"Load matching tracking and clip files to jump to a frame. ":"")+
+        "Open a movement report for player behaviours."
+      :"Track a video or load tracking results to review what the camera captured.");
+    return;
+  }
   const pooled=metrics.analysis_scope==="selected_clips_across_matches";
   const mismatch=getMismatch(metrics,tracking)||getMismatch(metrics,clipPlan)||
     (pooled&&getMismatch(tracking,clipPlan));
@@ -541,7 +584,7 @@ function renderMetrics(){
           const button=node("button","secondary",matched?"Jump to evidence":"Load this clip’s files to seek");
           button.type="button";button.disabled=!matched||Boolean(mismatch)||!validMs(o.video_start_ms)||
             (!Number.isFinite(video.duration)&&!tracking?.frames.length);
-          button.onclick=()=>seek(o.video_start_ms);
+          button.onclick=()=>seekEvidence(o.video_start_ms);
           row.append(button);details.append(row);
         }
       });
@@ -550,6 +593,7 @@ function renderMetrics(){
     cards.append(card);
   }
 }
+$("open-movement-report").onclick=()=>$("metrics-file").click();
 $("metrics-file").addEventListener("change",async e=>{
   const f=e.target.files[0],request=++metricsRequest;
   if(!f)return;
@@ -564,7 +608,7 @@ video.addEventListener("loadedmetadata",renderMetrics);
 document.addEventListener("fbrpro:plan",e=>{
   $("plan-name").textContent=e.detail?.name||"Optional · JSON";
   showSession();showOverlayControl();lastFrame=undefined;setupIdentityRoster();
-  pitchLayer.replaceChildren();footageLayer.replaceChildren();configureTimeline();renderMetrics();
+  pitchLayer.replaceChildren();footageLayer.replaceChildren();configureTimeline();renderTrackingCoverage();renderMetrics();
 });
 
 let localApp=false, sampleAvailable=false, sampleHasPlan=false, uploadLimit, fullUploadLimit, fullDurationLimit, calibrationLimit;

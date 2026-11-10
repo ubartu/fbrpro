@@ -30,12 +30,25 @@ function clip(){return clipPlan?.clips.find(c=>c.id===$("clip").value);}
 function opportunity(){return clip()?.opportunities.find(o=>o.id===$("opportunity").value);}
 function refresh(){
   const c=clip();
+  const previous=$("opportunity").value;
   $("opportunity").replaceChildren();
+  if(!c?.opportunities.length)option($("opportunity"),"","No review opportunities");
   for(const o of c?.opportunities||[])option($("opportunity"),o.id,reason[o.reason]??o.reason);
+  if(c?.opportunities.some(o=>o.id===previous))$("opportunity").value=previous;
   $("opportunity").disabled=!c?.opportunities.length;
   $("clip-time").textContent=c?secs(c.video_start_ms)+" to "+secs(c.video_end_ms):"";
   $("play").disabled=!c||!Number.isFinite(video.duration);
-  $("save-tag").disabled=!opportunity()||!$("player").value||!Number.isFinite(video.duration);
+  refreshObservation();
+}
+function refreshObservation(){
+  const o=opportunity(), hasVideo=Number.isFinite(video.duration);
+  const outside=hasVideo&&o&&o.video_end_ms>video.duration*1000+1;
+  $("save-tag").disabled=!o||!$("player").value||!hasVideo||Boolean(outside);
+  $("observation-help").textContent=!clipPlan?.players.length||!clip()?.opportunities.length
+    ?"Open a match clip plan with a player list and review opportunities to record observations."
+    :!hasVideo?"Open the matching video to record an observation."
+    :outside?"This opportunity falls outside the loaded video. Check the clip plan and footage."
+    :"Observations apply to the selected player and opportunity. Export before closing this page.";
 }
 function setVideo(file){
   if(tags.length){
@@ -134,6 +147,8 @@ function setupPlan(data,name){
   $("clip").replaceChildren();$("player").replaceChildren();
   for(const c of data?.clips||[])option($("clip"),c.id,c.id+(isPreviewClip(data,c)?" · Video time":" · Half "+c.period)+" · "+secs(c.video_start_ms));
   for(const p of data?.players||[])option($("player"),p.id,p.name);
+  if(!data?.clips.length)option($("clip"),"","Load a clip plan first");
+  if(!data?.players.length)option($("player"),"","No players in this clip plan");
   $("clip").disabled=!data?.clips.length;$("player").disabled=!data?.players.length;
   const selected=data?.selected_video_ms??data?.clips.reduce((sum,c)=>sum+c.video_end_ms-c.video_start_ms,0);
   status("plan-status",data?data.clips.length+(data.clips.length===1?" clip · ":" clips · ")+secs(selected)+" selected · video ID: "+data.video_id:
@@ -150,7 +165,8 @@ $("plan-file").addEventListener("change",async e=>{
     setupPlan(data,file.name);
   }catch(err){if(generation===planRequest)status("plan-status",err.message,true);}
 });
-$("clip").onchange=refresh;$("player").onchange=refresh;
+$("clip").onchange=refresh;
+$("player").onchange=$("opportunity").onchange=refreshObservation;
 $("play").onclick=async()=>{
   const c=clip();
   const full=clipPlan?.analysis_scope==="full_video";

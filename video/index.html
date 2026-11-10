@@ -101,7 +101,13 @@
   </div>
   <section class="panel evidence-panel" aria-labelledby="evidence-title">
     <div class="panel-head"><div><span class="eyebrow">03 / MOVEMENT EVIDENCE</span><h2 id="evidence-title">What the tracking shows</h2></div><span id="evidence-scope" class="chip">No report loaded</span></div>
-    <p id="metrics-status" class="status" role="status">Open a movement report for the evidence and coverage behind each measure.</p>
+    <div id="tracking-coverage" class="metric-grid" role="group" aria-label="Tracking coverage" hidden></div>
+    <p id="metrics-status" class="status" role="status">Track a video or load tracking results to review what the camera captured.</p>
+    <div class="row align-actions"><button id="open-movement-report" class="secondary" type="button">Open movement report</button></div>
+    <details class="align">
+      <summary>What can I review here?</summary>
+      <p class="hint">Tracking shows where people and the ball were detected and when pitch positions were available. A movement report adds reviewed player behaviours, such as receiving between the lines or closing down the ball carrier. It uses a clip plan aligned to the match clock, confirmed player identities, and reviewed match context.</p>
+    </details>
     <div id="metric-cards" class="metric-grid"></div>
   </section>
   <div class="tools">
@@ -133,7 +139,7 @@
       <label>Review note<textarea id="notes" rows="3" placeholder="What was visible? Where was the player?"></textarea></label>
       <div class="row"><button type="button" id="save-tag" disabled>Save observation</button><button type="button" id="export-tags" class="secondary" disabled>Export observations</button></div>
       <p id="tag-status" class="status" role="status"></p><ul id="tags"></ul>
-      <p class="hint">Observations apply only to the selected clips. Export before closing this page.</p>
+      <p id="observation-help" class="hint">Open a match clip plan with a player list and review opportunities to record observations.</p>
     </section>
   </div>
 </main>

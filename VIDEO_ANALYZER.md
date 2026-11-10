@@ -140,8 +140,10 @@ calibration when tracking that exact demo file again.
   Occlusion, camera cuts and very small players can still produce gaps.
 - Several clear torso crops describe each player's shirt, including dark and
   mixed colours. Two distinct groups that repeatedly appear together establish
-  **Team A** and **Team B**. A later shot keeps the same labels when the two
-  kits match the earlier ones. Unclear tracks and officials can remain
+  **Team A** and **Team B**. Those kit profiles apply throughout the recording,
+  including close views before and after the wide shot. Shirt grouping uses
+  people detected on the pitch, with camera projection checked separately.
+  Unclear tracks and officials can remain
   unassigned. The groups are separate from the reviewed lineup.
 - **GK?** marks a probable goalkeeper when a distinct shirt and a continuous
   run of verified positions near one goal support the hint. An ordinary

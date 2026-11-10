@@ -64,10 +64,15 @@ def team_groups(samples, reference):
         times = {ms for ms, keep in zip(rows, inliers) if keep}
         if repeated(times) and len(times) >= .65*len(rows):
             profiles[track] = (np.median(values[inliers], axis=0), times)
-    if len(profiles) < 2*MIN_PLAYERS:
+    if not profiles:
         return {}, reference, "two_co_visible_kits_unconfirmed"
     tracks = list(profiles)
     vectors = np.stack([profiles[t][0] for t in tracks])
+    if reference is not None:
+        assignments = assign_groups(np, tracks, vectors, profiles, reference)
+        return assignments, reference, "inferred" if assignments else "kit_appearance_unmatched"
+    if len(profiles) < 2*MIN_PLAYERS:
+        return {}, reference, "two_co_visible_kits_unconfirmed"
     weights = np.asarray([min(30, len(profiles[t][1])) for t in tracks])
     # Bound prototype search on long uninterrupted recordings.
     seeds = np.argsort(-weights, kind="stable")[:80]
@@ -88,20 +93,15 @@ def team_groups(samples, reference):
     if len(modes) < 2 or not repeated(modes[0][1] & modes[1][1]):
         return {}, reference, "two_co_visible_kits_unconfirmed"
     centers = np.stack([mode[0] for mode in modes])
-    if reference is None:
-        centers = centers[np.argsort(centers[:, 3], kind="stable")]
-        reference = centers
-    else:
-        direct = distance(np, centers, reference)
-        swapped = distance(np, centers[::-1], reference)
-        if swapped.sum() < direct.sum():
-            centers, direct, swapped = centers[::-1], swapped, direct
-        if direct.max() > KIT_RADIUS or swapped.sum()-direct.sum() < 8:
-            return {}, reference, "shot_kits_unmatched"
+    centers = centers[np.argsort(centers[:, 3], kind="stable")]
+    return assign_groups(np, tracks, vectors, profiles, centers), centers, "inferred"
+
+
+def assign_groups(np, tracks, vectors, profiles, centers):
     distances = distance(np, vectors[:, None], centers)
     assignments = {}
     for track, scores in zip(tracks, distances):
         best = int(np.argmin(scores))
         if scores[best] <= KIT_RADIUS and scores[1-best]-scores[best] >= 6:
             assignments[track] = ("team_a" if best == 0 else "team_b", profiles[track][1])
-    return assignments, reference, "inferred"
+    return assignments

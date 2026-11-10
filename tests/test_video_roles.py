@@ -23,6 +23,50 @@ def annotate(frames, **options):
 
 class VideoRoleTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_shirt_groups_survive_an_unavailable_pitch_projection(self):
+        import numpy as np
+
+        frames = team_frames()
+        for frame in frames:
+            frame["calibration_status"] = "automatic"
+            for row in frame["objects"]:
+                row.update(on_pitch=True, projection_status="off_pitch", x_m=None, y_m=None,
+                           _shirt_appearance=np.tile([55, 165, 145] if row["track_id"].startswith("a-")
+                                                      else [115, 125, 125], 3))
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "inferred")
+        for frame in frames:
+            for row in frame["objects"]:
+                expected = "kit:team_a" if row["track_id"].startswith("a-") else "kit:team_b"
+                self.assertEqual(row["inferred_team"], expected)
+                self.assertIsNone(row["x_m"])
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_known_kits_are_used_in_closeups_before_and_after_the_wide_shot(self):
+        import numpy as np
+
+        frames = []
+        for shot, players_per_team in enumerate((1, 3, 1)):
+            for sample in range(5):
+                rows = [person(f"{shot}-{team}-{i}", None,
+                               _shirt_appearance=np.tile(color, 3))
+                        for team, color in (("red", [55, 165, 145]), ("white", [115, 125, 125]))
+                        for i in range(players_per_team)]
+                if shot == 2:
+                    rows.extend(person(f"official-{i}", "yellow",
+                                       _shirt_appearance=np.tile([115, 115, 202], 3)) for i in range(3))
+                frames.append({"clip_id": "c", "video_time_ms": (shot*5+sample)*100,
+                               "camera_cut_suspected": shot > 0 and sample == 0,
+                               "calibration_status": "uncalibrated", "objects": rows})
+        shots = annotate(frames, shirt_groups=True)
+        self.assertEqual([shot["team_status"] for shot in shots], ["inferred"]*3)
+        for frame in frames:
+            for row in frame["objects"]:
+                key = row["track_id"]
+                expected = "kit:team_a" if "-red-" in key else "kit:team_b" if "-white-" in key else None
+                self.assertEqual(row["inferred_team"], expected)
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
     def test_appearance_groups_keep_team_labels_across_camera_cuts(self):
         import numpy as np
 

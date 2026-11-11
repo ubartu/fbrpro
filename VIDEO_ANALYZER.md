@@ -49,8 +49,10 @@ semantic pitch markings. The fitter uses straight lines and checks additional
 markings before accepting a ground-plane mapping. When that fit is unavailable,
 the landmark model can supply a mapping if the detected semantic markings
 independently support it. Across adjacent frames,
-camera motion can carry that mapping for up to two samples while current
-painted lines still support it. Cuts, long gaps and failed checks force a new
+camera motion can carry that mapping for two samples between refreshes while
+current painted lines still support it. If a refresh fails, the supported
+mapping can bridge the gap for at most one second from its original anchor.
+Cuts, long gaps, expired anchors and failed painted-line checks force a new
 estimate. Reviewed manual calibration takes precedence.
 Export reviewed identity maps from a run using the same pitch model and
 sampling rate as the run that applies them.
@@ -65,83 +67,40 @@ python -m football_normalizer.video_calibration_benchmark /path/to/labeled-image
   --output reports/video-pilot/calibration-validation.json
 ```
 
-### Pitch orientation, coverage and spatial movement
+### Stable live tracking and offline geometry review
 
-New tracking runs include camera-segment IDs, a ground-plane mapping, continuity
-checks and a local position-sensitivity estimate in metres. Fresh mappings are
-compared with the preceding map transported by image camera motion. A symmetric
-180-degree solution can be corrected within a continuous segment. Unsupported
-jumps are excluded from movement measurements; repeated failures reacquire a new segment. Camera cuts,
-tracking gaps and insufficient overlap do not establish orientation across views.
-These measurement checks do not suppress video detections or erase the current
-pitch replay estimates. The detector retains its independently fitted pitch
-boundary, and uncertain pitch estimates remain labelled as unsuitable for
-movement statistics. Geometry reuses the tracker's camera-motion result rather
-than running a second feature-flow pass. Fresh reports are processed in place
-to avoid duplicating the complete tracking history in memory.
+The live tracker and replay UI are based on the pre-geometry implementation
+from commit `0244d67`, with short field-localization recovery. Experimental orientation
+correction, spatial summaries and uncertainty processing do not run during
+tracking or playback. Team-colour grouping, compact player numbers, ball
+tracking, pitch-line calibration and referee-candidate hiding remain available.
+The local status endpoint identifies this pipeline as `stable-0244d67-recovery`.
 
-Open **Pitch orientation and movement setup** in the movement evidence panel:
+If field localization briefly fails, the last visible outline can follow
+reliable camera motion for at most 750 ms while the current region remains
+predominantly turf. Detection runs on the actual new frame inside that outline;
+old player boxes are not invented or replayed. Cuts reset the outline and missing
+camera support expires it. This image-space outline never supplies metric pitch
+coordinates. Semantic mapping recovery separately requires current painted
+lines, and expires after one second. A missing metric mapping can therefore
+leave pitch positions unavailable without suppressing valid video detections.
+For an irregular turf mask caused by sun/shadow, candidate detection additionally
+requires long painted lines with different orientations and spatial spread. It
+uses the actual turf contour rather than filling excluded areas with a convex
+hull. Unmarked or fragmented green regions remain unavailable.
 
-1. Select a camera segment and compare it with the footage. Confirm the current
-   pitch orientation or rotate it 180 degrees. This sets the fixed pitch basis;
-   it does not determine which goal a team attacks.
-2. Assign the segment's half/period and confirm that it shows live match play.
-   Split mixed live/replay footage into separate clips before confirming a
-   segment. The checkbox is a reviewer assertion, not automatic replay detection.
-3. Set each team's attacking direction for each relevant half. Directions for
-   extra time are separate. **Apply review** updates the replay and statistics
-   without running detection again. Changes are retained in the draft when
-   switching teams or segments; apply them before exporting.
-4. Select a tracked player to see the fixed 3-by-3 pitch-zone grid, usable
-   observed time and directional displacement. **Export reviewed tracking** saves
-   the review and results in the tracking JSON; reopening it restores them.
-
-Automatic maps remain estimates even after orientation review. Position
-uncertainty is a sensitivity estimate using marking residuals, local foot-point
-pixel displacement and camera-compensated temporal disagreement; it is not a
-calibrated statistical confidence interval.
-Assumed pitch dimensions are displayed. Old reports without this metadata need
-tracking rerun; the review does not invent missing calibration evidence.
-
-Spatial calculations require two observed positions of the same track in the
-same camera segment, period and clip, with no camera cut or long sampling gap.
-They require reviewed orientation/live play, a verified or automatic projection,
-position sensitivity no greater than 3 m, and plausible interval displacement.
-These are geometry-quality checks, not player-role labels. Interpolated and
-missing positions, referee candidates and duplicate track observations are
-excluded. The export records the active quality policy.
-
-Zone percentages divide conservatively resolved zone time by usable observed
-time; time near boundaries or crossing a zone within a sample interval is
-reported separately, so zone percentages may sum to less than 100%. Coverage is
-usable time divided by contiguous observed track time, not full-match minutes.
-Player identity switches break intervals; anonymous IDs remain separate tracks.
-
-Directional movement also requires a confirmed team direction. It uses
-contiguous windows of approximately one second and shorter remaining tails.
-Only endpoint displacement exceeding the sum of endpoint sensitivity estimates
-contributes. Zero therefore means no displacement resolved above that error
-estimate. This is conservative observed displacement, not distance covered,
-speed, sprint counts or an extrapolated match total.
-
-For offline processing, supply a review JSON with `segments` keyed by the
-tracking report's `pitch_segments[].id` and `directions` keyed by period/team:
-
-```json
-{"segments":{"preview-clip:geometry:0":{"orientation":"normal","period":1,"live_play":true}},
- "directions":{"1":{"kit:team_a":1,"kit:team_b":-1},"2":{"kit:team_a":-1,"kit:team_b":1}}}
-```
+Experimental geometry functions remain available through the offline
+`football_normalizer.video_geometry` command and the explicit `/api/geometry`
+review endpoint for existing reports that contain the required geometry
+metadata. They are not loaded by the main replay page. Normal live reports do
+not claim geometry-derived zone occupancy or directional movement statistics.
 
 ```sh
-python -m football_normalizer.video_geometry tracking.json --review pitch-review.json --output tracking-reviewed.json
+python -m football_normalizer.video_geometry tracking-with-geometry.json --review pitch-review.json --output tracking-reviewed.json
 ```
 
-Validation: `python -m unittest discover -s tests` checks camera flow, known
-pan/zoom projections, symmetric maps, jump rejection and reacquisition, review
-gates, time weighting, uncertainty, gaps, cuts and period-specific direction.
-`node tests/video_geometry_ui.cjs` checks the setup and report interface.
-Real-video smoke reports are stored in `reports/video-pilot`. They check the
-pipeline, not independently annotated metric player-position accuracy.
+After updating, reload the page and generate new tracking results. Existing
+reports retain observations and gaps produced by the version that created them.
 
 For dedicated ball tracking, export the
 [`ball11n.pt` football checkpoint](https://huggingface.co/boxerab/gst-python-ml-football)

@@ -71,7 +71,8 @@ def detect_pitch(cv2, np, frame):
             or len(ordered) > 1 and cv2.contourArea(ordered[1]) > area * .30):
         return None
     hull = cv2.convexHull(turf)
-    if area < cv2.contourArea(hull) * .90:
+    solid = area >= cv2.contourArea(hull) * .90
+    if area < cv2.contourArea(hull) * .80:
         return None
     fill = cv2.drawContours(np.zeros_like(green), [turf], 0, 255, cv2.FILLED)
     saturation, brightness = hsv[:, :, 1], hsv[:, :, 2]
@@ -82,7 +83,22 @@ def detect_pitch(cv2, np, frame):
     if lines is None:
         return None
 
-    outline = cv2.approxPolyDP(hull, .007 * cv2.arcLength(hull, True), True).reshape(-1, 2).astype(np.float32)
+    if not solid:
+        # Sun/shadow boundaries can make a real pitch concave in the colour
+        # mask. Require independent marking directions, then retain the turf
+        # contour itself rather than filling its missing areas with a hull.
+        long = [(x1, y1, x2, y2) for x1, y1, x2, y2 in lines[:, 0]
+                if math.hypot(x2-x1, y2-y1) >= width*.10]
+        angles = [math.degrees(math.atan2(y2-y1, x2-x1)) % 180 for x1, y1, x2, y2 in long]
+        diverse = any(20 <= abs(a-b) <= 160 for a in angles for b in angles)
+        endpoints = np.asarray([(x1, y1) for x1, y1, _, _ in long]+
+                               [(x2, y2) for _, _, x2, y2 in long], np.float32)
+        if not diverse or cv2.contourArea(cv2.convexHull(endpoints)) < .02*width*height:
+            return None
+
+    reference = hull if solid else turf
+    epsilon = .007 if solid else .004
+    outline = cv2.approxPolyDP(reference, epsilon * cv2.arcLength(reference, True), True).reshape(-1, 2).astype(np.float32)
     polygon = outline
     minimum_trimmed_area = cv2.contourArea(outline) * .91
     # A visible near/far touchline may lie a little inside the contiguous turf.

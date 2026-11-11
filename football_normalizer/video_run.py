@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
-from . import video, video_geometry, video_inference, video_kits, video_metrics, video_motion, video_pitch, video_pitch_lines, video_roles, video_tracking
+from . import video, video_inference, video_kits, video_metrics, video_motion, video_pitch, video_pitch_lines, video_roles, video_tracking
 from .export import parquet
 
 
@@ -58,7 +58,6 @@ def run(args):
         "source_sha256": source, "model_sha256": model, "plan": json_hash(plan),
         "calibration": json_hash(calibration), "reviewed_identities": json_hash(identities),
         "tracker_code": file_hash(Path(video_tracking.__file__)),
-        "pitch_geometry_code": file_hash(Path(video_geometry.__file__)),
         "inference_code": file_hash(Path(video_inference.__file__)),
         "camera_motion_code": file_hash(Path(video_motion.__file__)),
         "pitch_code": file_hash(Path(video_pitch.__file__)),

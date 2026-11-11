@@ -10,6 +10,49 @@ from football_normalizer.video_tracking import Calibration, calibrated_boundary
 @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                      "optional vision dependencies not installed")
 class AutomaticCalibrationTests(unittest.TestCase):
+    def test_failed_semantic_refresh_keeps_line_supported_map_but_expires(self):
+        import cv2
+        import numpy as np
+
+        model = LinePitchModel.__new__(LinePitchModel)
+        model.cv2, model.np = cv2, np
+        model.lines = pitch_lines(105, 68)
+        model.landmark = None
+        model.motion = Mock()
+        model.motion.update.return_value = np.array([[1., 0, 0], [0, 1., 0]])
+        model.previous_fit = (np.eye(3), .1, .2)
+        model.previous_quality = {"method": "semantic_lines", "matched_lines": 5}
+        model.last_stamp, model.anchor_stamp, model.followed = 200, 0, 2
+        model.follow = Mock(return_value=True)
+        model.engine = Mock()
+        model.engine.forward.return_value = np.zeros((1, 29, 360, 640), np.float32)
+        frame = np.zeros((360, 640, 3), np.uint8)
+        for stamp in range(300, 1001, 100):
+            fit = model.fit(frame, stamp)
+            self.assertIsNotNone(fit)
+            self.assertTrue(model.last_quality["refresh_failed"])
+            self.assertEqual(model.last_quality["anchor_age_ms"], stamp)
+        self.assertIsNone(model.fit(frame, 1100))
+        self.assertIsNone(model.previous_fit)
+
+    def test_failed_refresh_cannot_carry_mapping_without_current_painted_lines(self):
+        import cv2
+        import numpy as np
+
+        model = LinePitchModel.__new__(LinePitchModel)
+        model.cv2, model.np = cv2, np
+        model.lines = pitch_lines(105, 68)
+        model.landmark = None
+        model.motion = Mock()
+        model.motion.update.return_value = np.array([[1., 0, 0], [0, 1., 0]])
+        model.previous_fit = (np.eye(3), .1, .2)
+        model.previous_quality = {"method": "semantic_lines", "matched_lines": 5}
+        model.last_stamp, model.anchor_stamp, model.followed = 200, 0, 2
+        model.follow = Mock(return_value=False)
+        model.engine = Mock()
+        model.engine.forward.return_value = np.zeros((1, 29, 360, 640), np.float32)
+        self.assertIsNone(model.fit(np.zeros((360, 640, 3), np.uint8), 300))
+
     def test_visible_pitch_is_clipped_when_distant_corners_cross_the_horizon(self):
         import cv2
         import numpy as np

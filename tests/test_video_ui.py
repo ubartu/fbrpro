@@ -39,7 +39,9 @@ class ReviewServerTests(unittest.TestCase):
             run.assert_not_called()
         self.assertEqual(self.call("POST", "/api/geometry", body=data)[0], 403)
         self.assertEqual(self.call("POST", "/api/geometry", headers=headers, body=b"{}")[0], 400)
-        self.assertEqual(self.call("GET", "/video/geometry.js")[0], 200)
+        self.assertEqual(self.call("GET", "/video/geometry.js")[0], 404)
+        status, _, body = self.call("GET", "/api/status")
+        self.assertEqual(json.loads(body)["tracking_pipeline"], "stable-0244d67-recovery")
 
     def setUp(self):
         scratch = self.enterContext(TemporaryDirectory())

@@ -176,6 +176,7 @@ class LinePitchModel:
         self.previous_fit = None
         self.previous_quality = None
         self.last_stamp = None
+        self.anchor_stamp = None
         self.followed = 0
 
     def follow(self, image, matrix):
@@ -235,15 +236,19 @@ class LinePitchModel:
         motion = self.motion.update(image, ()) if time_ms is not None else None
         elapsed = time_ms-self.last_stamp if time_ms is not None and self.last_stamp is not None else None
         self.last_stamp = time_ms
-        if self.previous_fit and self.followed < 2 and elapsed is not None and 0 < elapsed <= 250 and motion is not None:
+        followed_fit = None
+        if self.previous_fit and elapsed is not None and 0 < elapsed <= 250 and motion is not None:
             candidate = self.previous_fit[0] @ np.linalg.inv(np.vstack((motion, [0, 0, 1.])))
             if self.follow(image, candidate):
-                self.followed += 1
-                self.previous_fit = (candidate, *self.previous_fit[1:])
-                self.last_quality = {**self.previous_quality, "method": "semantic_lines_flow",
-                                     "propagated_frames": self.followed}
-                h, w = frame.shape[:2]
-                return candidate @ np.diag([640/w, 360/h, 1.]), *self.previous_fit[1:]
+                followed_fit = (candidate, *self.previous_fit[1:])
+                if self.followed < 2:
+                    self.followed += 1
+                    self.previous_fit = followed_fit
+                    self.last_quality = {**self.previous_quality, "method": "semantic_lines_flow",
+                                         "propagated_frames": self.followed}
+                    h, w = frame.shape[:2]
+                    return candidate @ np.diag([640/w, 360/h, 1.]), *self.previous_fit[1:]
+        previous_quality, propagated = self.previous_quality, self.followed
         self.previous_fit = None
         self.followed = 0
         raw = self.engine.forward(cv2.dnn.blobFromImage(image, 1/255, swapRB=False))
@@ -269,10 +274,25 @@ class LinePitchModel:
         if result is None:
             result = self.checked_landmarks(frame, observed)
         if result is None:
-            return None
+            anchor = getattr(self, "anchor_stamp", None)
+            if (followed_fit is None or anchor is None or time_ms is None
+                    or not 0 < time_ms-anchor <= 1000):
+                return None
+            # A failed refresh must not erase an otherwise supported camera
+            # mapping. Current painted lines and optical flow both have to
+            # agree, and the original semantic anchor expires after one second.
+            self.previous_fit = followed_fit
+            self.previous_quality = previous_quality
+            self.followed = propagated+1
+            self.last_quality = {**previous_quality, "method": "semantic_lines_flow",
+                                 "propagated_frames": self.followed,
+                                 "refresh_failed": True, "anchor_age_ms": time_ms-anchor}
+            h, w = frame.shape[:2]
+            return followed_fit[0] @ np.diag([640/w, 360/h, 1.]), *followed_fit[1:]
         matrix, rms, check, quality = result
         self.previous_fit = (matrix, rms, check)
         self.previous_quality = quality
+        self.anchor_stamp = time_ms
         h, w = frame.shape[:2]
         matrix = matrix @ np.diag([640/w, 360/h, 1.])
         self.last_quality = quality

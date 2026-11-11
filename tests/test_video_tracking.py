@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 from football_normalizer.video_motion import CameraMotion
 from football_normalizer.video_tracking import (
     CameraFollow, Detection, Tracker, calibration_from, canonical_rows, identity_from, kit_sample, object_row,
-    pitch_detections, run,
+    pitch_detections, follow_pitch_boundary, run,
 )
 
 
@@ -19,7 +19,29 @@ def person(x):
 class TrackingTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                          "optional vision dependencies not installed")
-    def test_measurement_rejection_preserves_video_and_pitch_tracks_with_one_motion_pass(self):
+    def test_short_outline_recovery_requires_camera_motion_turf_and_recent_anchor(self):
+        import cv2
+        import numpy as np
+
+        frame = np.full((360, 640, 3), (34, 138, 68), np.uint8)
+        boundary = {"polygon_xy": [[20, 40], [600, 40], [600, 330], [20, 330]]}
+        motion = np.array([[1., 0, 4], [0, 1., 2]])
+        recovered = follow_pitch_boundary(cv2, np, frame, boundary, motion, 400)
+        self.assertEqual(recovered["source"], "tracked_pitch_outline")
+        self.assertEqual(recovered["anchor_age_ms"], 400)
+        self.assertAlmostEqual(min(p[0] for p in recovered["polygon_xy"]), 24)
+        self.assertIsNone(follow_pitch_boundary(cv2, np, frame, boundary, motion, 751))
+        self.assertIsNone(follow_pitch_boundary(cv2, np, frame, boundary, None, 100))
+        self.assertIsNone(follow_pitch_boundary(cv2, np, frame*0, boundary, motion, 100))
+        self.assertIsNone(follow_pitch_boundary(cv2, np, frame, None, motion, 100))
+        concave = {"polygon_xy": [[20, 40], [600, 40], [600, 330], [400, 330],
+                                  [400, 180], [240, 180], [240, 330], [20, 330]]}
+        kept = follow_pitch_boundary(cv2, np, frame, concave, motion, 100)
+        contour = np.asarray(kept["polygon_xy"], np.float32)
+        self.assertLess(cv2.pointPolygonTest(contour, (324., 262.), False), 0)
+    @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
+                         "optional vision dependencies not installed")
+    def test_stable_live_tracker_never_calls_experimental_geometry(self):
         import cv2
         import numpy as np
 
@@ -59,16 +81,17 @@ class TrackingTests(unittest.TestCase):
                   patch("football_normalizer.video_tracking.YoloX"),
                   patch("football_normalizer.video_tracking.PitchModel", return_value=model),
                   patch("football_normalizer.video_tracking.CameraMotion", return_value=motion),
-                  patch("football_normalizer.video_tracking.PitchContinuity", return_value=geometry),
+                  patch("football_normalizer.video_geometry.PitchContinuity", return_value=geometry),
                   patch("football_normalizer.video_tracking.pitch_detections", side_effect=detect)):
                 data = run(source, plan, source, {"coordinate_length_m": 105, "coordinate_width_m": 68, "segments": []},
                            pitch_model=source)
         self.assertEqual(motion.update.call_count, 3)
+        geometry.update.assert_not_called()
         self.assertEqual(len(data["frames"]), 3)
+        self.assertNotIn("spatial_summary", data)
         ids = []
         for f in data["frames"]:
-            self.assertFalse(f["pitch_geometry"]["usable"])
-            self.assertFalse(f["pitch_geometry"]["measurement_mapping_available"])
+            self.assertNotIn("pitch_geometry", f)
             self.assertEqual(f["calibration_status"], "automatic")
             self.assertTrue(all(o["observed"] and o["x_m"] is not None for o in f["objects"]))
             self.assertEqual(len(f["objects"]), 2)

@@ -23,7 +23,6 @@ from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
 from .video_pitch_lines import LinePitchModel
 from .video_roles import annotate_video_roles
-from .video_geometry import PitchContinuity, position_quality, reviewed_report
 
 VERSION = "fbrpro-video-tracking-v1"
 TRACK_ID_SCOPE = "pitch-v2"
@@ -506,6 +505,39 @@ def pitch_detections(cv2, np, frame, detector, calibration, length, width):
             if d.object_type == "player" else d for d in detections], boundary, status, rejected
 
 
+def follow_pitch_boundary(cv2, np, frame, boundary, motion, age_ms):
+    """Short image-space recovery, never a metric pitch calibration."""
+    if boundary is None or motion is None or age_ms is None or not 0 < age_ms <= 750:
+        return None
+    h, w = frame.shape[:2]
+    points = np.asarray(boundary["polygon_xy"], np.float32)
+    moved = cv2.transform(points[:, None], motion)[:, 0]
+    if not np.isfinite(moved).all():
+        return None
+    if cv2.isContourConvex(moved):
+        screen = np.asarray([[0, 0], [w-1, 0], [w-1, h-1], [0, h-1]], np.float32)
+        area, clipped = cv2.intersectConvexConvex(moved, screen)
+        if clipped is None:
+            return None
+        polygon = clipped[:, 0]
+    else:
+        # Never fill concavities that deliberately excluded non-turf regions.
+        if np.any(moved < [0, 0]) or np.any(moved > [w-1, h-1]):
+            return None
+        polygon, area = moved, cv2.contourArea(moved)
+    if area < .12*w*h:
+        return None
+    scale = min(1., 480/w)
+    image = cv2.resize(frame, (round(w*scale), round(h*scale)))
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, (27, 53, 36), (85, 255, 255))
+    mask = np.zeros(green.shape, np.uint8)
+    cv2.fillPoly(mask, [np.rint(polygon*scale).astype(np.int32)], 255)
+    if np.mean(green[mask > 0] > 0) < .65:
+        return None
+    return {"polygon_xy": polygon.round(2).tolist(), "source": "tracked_pitch_outline", "anchor_age_ms": age_ms}
+
+
 def object_row(track, calibration, length, width, identities):
     d = track.last
     player, team = identities.get(track.id, (None, None)) if d.object_type == "player" else (None, None)
@@ -610,7 +642,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=scope)
             ball_tracker = BallTracker(clip["id"], frame_width) if ball_detector else None
             camera_motion = CameraMotion(cv2, np)
-            geometry_guard = None
+            boundary_reference = boundary_anchor_ms = None
             if not through_eof and not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
             # Do not invent clock from frame index/FPS when the decoder has no timestamps.
@@ -674,12 +706,11 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 if pending_cut:
                     tracker.reset()
                     camera_motion.reset()
+                    boundary_reference = boundary_anchor_ms = None
                     if ball_tracker:
                         ball_tracker.reset()
                     if isinstance(automatic_model, LinePitchModel):
                         automatic_model.reset()
-                    if geometry_guard is not None:
-                        geometry_guard.reset()
                 automatic_quality = None
                 if (pitch_model is not None or pitch_lines_model is not None) and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
@@ -702,30 +733,31 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                               automatic_quality["method"], "automatic_pitch_lines")
                 if ball_detector:
                     detections = [d for d in detections if d.object_type == "player"]
+                motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
+                fresh_boundary = boundary is not None
+                if boundary is None and img is not None:
+                    boundary = follow_pitch_boundary(cv2, np, img, boundary_reference, motion,
+                        video_ms-boundary_anchor_ms if boundary_anchor_ms is not None else None)
+                    if boundary is not None:
+                        contour = np.asarray(boundary["polygon_xy"], np.float32)
+                        def accepts_person(point):
+                            nonlocal off_pitch
+                            inside = cv2.pointPolygonTest(contour, tuple(map(float, point)), True) >= -2
+                            off_pitch += not inside
+                            return inside
+                        detections = detector.detect(img, boundary["polygon_xy"], accepts_person=accepts_person)
+                        detections = [replace(d, kit_color=kit_sample(cv2, np, img, d.box))
+                                      if d.object_type == "player" else d for d in detections
+                                      if not ball_detector or d.object_type == "player"]
+                        pitch_status = "estimated"
+                        counters["outline_recovery_frames"] += 1
+                if fresh_boundary:
+                    boundary_anchor_ms = video_ms
+                boundary_reference = boundary
                 counters["off_pitch_candidates"] += off_pitch
                 counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
-                motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
-                # Detection/association keep the current independently fitted
-                # pitch boundary. Measurement rejection must not erase people
-                # or the ball from the video, or interrupt their identities.
-                geometry_quality = None
-                if img is not None:
-                    if geometry_guard is None:
-                        geometry_guard = PitchContinuity(cv2, np, length, width, clip["id"])
-                    trusted_cal = cal is not None and cal.status in ("verified", "automatic")
-                    matrix, geometry_quality = geometry_guard.update(
-                        img, video_ms, cal.matrix if trusted_cal else None,
-                        reviewed=trusted_cal and cal.status == "verified", camera_transform=motion)
-                    if trusted_cal and matrix is not None:
-                        cal = replace(cal, matrix=matrix)
-                    geometry_quality["image_to_pitch"] = cal.matrix.tolist() if trusted_cal else None
-                    geometry_quality["measurement_mapping_available"] = matrix is not None
                 tracks = tracker.update(detections, video_ms, motion)
                 rows = [object_row(t, cal, length, width, identities) for t in tracks]
-                for row in rows:
-                    row["position_uncertainty_m"] = position_quality(np, row, cal, automatic_quality, img.shape) if row["observed"] and img is not None else None
-                    if row["position_uncertainty_m"] is not None and geometry_quality and geometry_quality["drift_m"] is not None:
-                        row["position_uncertainty_m"] = round(row["position_uncertainty_m"]+geometry_quality["drift_m"], 3)
                 for track, row in zip(tracks, rows):
                     color = track.last.kit_color
                     if not track.missing and color is not None and color == track.kit_sample:
@@ -772,7 +804,6 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "calibration_fit_rms_m": cal.rms_m if cal else None,
                                "calibration_check_max_m": cal.check_max_m if cal else None,
                                "calibration_line_quality": automatic_quality,
-                               "pitch_geometry": geometry_quality,
                                "camera_cut_suspected": pending_cut,
                                "camera_motion_compensated": motion is not None,
                                "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
@@ -808,7 +839,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
     if pitch_lines_model:
         with Path(pitch_lines_model).open("rb") as handle:
             pitch_lines_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-    report = {"version": VERSION, "match_id": plan["match_id"], "video_id": plan["video_id"],
+    return {"version": VERSION, "match_id": plan["match_id"], "video_id": plan["video_id"],
             "plan_id": plan["plan_id"], "coordinate_frame": "stadium_fixed",
             "coordinate_length_m": length, "coordinate_width_m": width,
             "dimensions_assumed": bool(calibration_data.get("dimensions_assumed", False)),
@@ -826,7 +857,6 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
             "kit_color_policy": "multi-frame shirt appearance groups; single-color hints remain available",
             "automatic_calibration": bool(pitch_model or pitch_lines_model),
-            "position_uncertainty_method": "marking residual + local foot-point sensitivity + camera-compensated temporal disagreement; not a confidence interval",
             "role_inference": roles,
             "sync": [{"segment_id": s.id, "status": s.sync_status,
                       "check_max_ms": s.check_max_ms} for s in aligned.values()],
@@ -835,7 +865,6 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                              "follow_camera": c.landmarks is not None,
                              "fit_rms_m": c.rms_m, "check_max_m": c.check_max_m} for c in calibrations],
             "clips": summaries, "frames": frames}
-    return reviewed_report(report, copy_report=False)
 
 
 def canonical_rows(report):

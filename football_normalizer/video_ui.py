@@ -27,7 +27,6 @@ STATIC = {
     "/video/review.css": "video/review.css",
     "/video/review.js": "video/review.js",
     "/video/analysis.js": "video/analysis.js",
-    "/video/geometry.js": "video/geometry.js",
     "/dashboard/": "dashboard/index.html",
     "/dashboard/index.html": "dashboard/index.html",
 }
@@ -267,6 +266,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             demo = self.server.demo
             self.send_json(HTTPStatus.OK, {"demo_available": "video" in demo and "tracking" in demo,
+                                           "tracking_pipeline": "stable-0244d67-recovery",
                                            "demo_plan_available": "plan" in demo,
                                            "max_upload_bytes": MAX_UPLOAD_BYTES, "max_window_ms": MAX_WINDOW_MS,
                                            "max_full_upload_bytes": MAX_FULL_UPLOAD_BYTES,

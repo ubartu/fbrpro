@@ -7,6 +7,23 @@ from football_normalizer.video_pitch import detect_pitch
 @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                      "optional vision dependencies not installed")
 class PitchBoundaryTests(unittest.TestCase):
+    def test_concave_turf_needs_diverse_markings_and_does_not_fill_non_turf(self):
+        import cv2
+        import numpy as np
+
+        image = np.full((360, 640, 3), (36, 41, 53), dtype=np.uint8)
+        turf = np.int32([[20, 50], [620, 50], [620, 330], [400, 330],
+                         [400, 160], [240, 160], [240, 330], [20, 330]])
+        cv2.fillPoly(image, [turf], (34, 138, 68))
+        cv2.line(image, (30, 65), (610, 65), (225, 225, 225), 2)
+        self.assertIsNone(detect_pitch(cv2, np, image))
+        cv2.line(image, (150, 55), (150, 325), (225, 225, 225), 2)
+        boundary = detect_pitch(cv2, np, image)
+        self.assertIsNotNone(boundary)
+        self.assertTrue(boundary.contains((100, 160)))
+        self.assertFalse(boundary.contains((320, 260)))
+        self.assertFalse(boundary.contains((10, 160)))
+
     def test_painted_touchline_excludes_grass_runoff(self):
         import cv2
         import numpy as np

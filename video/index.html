@@ -113,6 +113,62 @@
     </details>
     <div id="metric-cards" class="metric-grid"></div>
   </section>
+  <section class="panel statistics-panel" aria-labelledby="statistics-title">
+    <div class="panel-head"><div><span class="eyebrow">VIDEO STATISTICS</span><h2 id="statistics-title">Positions, movement and match actions</h2></div><span id="statistics-scope" class="chip">No statistics yet</span></div>
+    <p class="hint">Calculate from saved tracking after detection finishes. Coverage stays visible with every player. These calculations do not change the tracker or replay.</p>
+    <div class="row statistics-actions">
+      <button id="statistics-calculate" type="button" disabled>Calculate statistics</button>
+      <label class="statistics-file">Open statistics report<input id="statistics-file" type="file" accept="application/json,.json"></label>
+      <button id="statistics-export" type="button" class="secondary" disabled>Export statistics</button>
+    </div>
+    <details class="align" id="statistics-setup">
+      <summary>Review the scope and add match context</summary>
+      <p class="hint">Position maps can use estimated calibration. Physical measurements need checked alignment, pitch dimensions, orientation and live play. Confirm only what you have reviewed in this video range.</p>
+      <div class="grid">
+        <label>Start video seconds<input id="statistics-start" type="number" min="0" step=".001" placeholder="Entire tracking report"></label>
+        <label>End video seconds<input id="statistics-end" type="number" min="0" step=".001" placeholder="Entire tracking report"></label>
+        <label>Second half starts at video seconds<input id="statistics-half-start" type="number" min="0" step=".001" placeholder="Optional · 0 for second-half-only footage"></label>
+      </div>
+      <p class="hint">For a full-match recording, set the actual start of the second half. Choosing a direction for a half alone does not assign video frames to that half. Advanced context can provide period intervals, including extra time.</p>
+      <div class="statistics-checks">
+        <label class="overlay-control"><input id="statistics-live" type="checkbox"> This scope shows live play, without replays or close-ups</label>
+        <label class="overlay-control"><input id="statistics-calibration" type="checkbox"> I checked pitch alignment throughout this scope</label>
+        <label class="overlay-control"><input id="statistics-orientation" type="checkbox"> The pitch orientation is consistent throughout this scope</label>
+        <label class="overlay-control"><input id="statistics-dimensions" type="checkbox"> <span id="statistics-dimensions-label">The report uses the actual pitch dimensions</span></label>
+        <label class="overlay-control"><input id="statistics-ground-ball" type="checkbox"> The projected ball positions in this scope are on the ground</label>
+      </div>
+      <div class="grid">
+        <label>Team<select id="statistics-direction-team"></select></label>
+        <label>Half / period<select id="statistics-direction-period"><option value="1">First half</option><option value="2">Second half</option><option value="3">Extra time: first half</option><option value="4">Extra time: second half</option></select></label>
+      </div>
+      <label>Attacking direction on the fixed pitch<select id="statistics-direction"><option value="">Not confirmed</option><option value="1">→ Right goal (increasing X)</option><option value="-1">← Left goal (decreasing X)</option></select></label>
+      <p class="hint">Set each team and period separately. Directional stats stay unavailable while orientation or attacking direction is unconfirmed.</p>
+      <details class="align"><summary>Advanced: reviewed identities, phases and actions</summary>
+        <p class="hint">A context JSON can supply identities, phase episodes, defensive lines, ball carriers, reviewed events, possession intervals and event-coverage windows. Event totals and success rates need complete reviewed coverage; a player near the ball is not automatically its owner. Proximity-based candidates remain separate from confirmed actions.</p>
+        <label>Context JSON<input id="statistics-context-file" type="file" accept="application/json,.json"></label>
+        <div class="row"><button id="statistics-context-export" class="secondary" type="button">Export context</button><button id="statistics-context-template" class="secondary" type="button">Download context template</button></div>
+        <p id="statistics-context-status" class="status" role="status"></p>
+      </details>
+    </details>
+    <p id="statistics-status" class="status" role="status">Track a video or open a tracking report, then calculate statistics.</p>
+    <div id="statistics-results" hidden>
+      <p id="statistics-notes" class="statistics-notes"></p>
+      <details class="align"><summary>Measurement notes and limitations</summary><ul id="statistics-method-notes"></ul></details>
+      <div class="statistics-tabs" role="group" aria-label="Statistics view"><button id="statistics-tab-player" type="button" class="secondary" aria-pressed="true">Players</button><button id="statistics-tab-team" type="button" class="secondary" aria-pressed="false">Team shape</button><button id="statistics-tab-candidates" type="button" class="secondary" aria-pressed="false">Actions to review</button></div>
+      <div id="statistics-player-view">
+        <div class="metric-picker"><label>Tracked player<select id="statistics-player"></select></label></div>
+        <p id="statistics-player-identity" class="status"></p>
+        <div id="statistics-player-coverage" class="metric-grid"></div>
+        <div class="statistics-maps">
+          <article class="statistics-map"><h3>Position heatmap</h3><p class="hint">Fixed pitch coordinates · left goal on the left</p><div id="statistics-heatmap" class="statistics-pitch" aria-label="Player position heatmap"></div></article>
+          <article class="statistics-map"><h3>Time in pitch zones</h3><p id="statistics-zone-note" class="hint">Percent of usable observed time</p><div id="statistics-zones" class="statistics-pitch statistics-zone-grid" aria-label="Player pitch zone occupancy"></div></article>
+        </div>
+        <div id="statistics-player-metrics" class="statistics-sections"></div>
+      </div>
+      <div id="statistics-team-view" hidden><div class="metric-picker"><label>Observed team<select id="statistics-team"></select></label></div><p class="hint">These describe visible tracked teammates. They are not a complete formation when players are off camera.</p><div id="statistics-team-metrics" class="statistics-sections"></div></div>
+      <div id="statistics-candidate-view" hidden><p class="hint">These are moments to inspect, not confirmed passes, touches or possession. Review the footage before recording an action.</p><div id="statistics-candidates"></div></div>
+    </div>
+  </section>
   <div class="tools">
     <section class="panel" aria-labelledby="clips-title">
       <div class="panel-head"><div><span class="eyebrow">REVIEW TOOLS</span><h2 id="clips-title">Clip queue</h2></div></div>
@@ -148,5 +204,6 @@
 </main>
 <script src="review.js"></script>
 <script src="analysis.js"></script>
+<script src="statistics.js"></script>
 </body>
 </html>

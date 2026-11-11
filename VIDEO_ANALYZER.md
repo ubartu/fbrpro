@@ -102,6 +102,16 @@ python -m football_normalizer.video_geometry tracking-with-geometry.json --revie
 After updating, reload the page and generate new tracking results. Existing
 reports retain observations and gaps produced by the version that created them.
 
+### Optional video statistics
+
+Use **Video statistics → Calculate statistics** to analyse an existing tracking
+report without rerunning detection. Position maps, movement/physical estimates,
+relationships, observed team shape, off-ball candidates and reviewed action
+statistics are calculated separately from replay. Unavailable results explain
+the required calibration, identity or event evidence. See
+[Video statistics](VIDEO_STATISTICS.md) for definitions, review controls, context
+format, commands and limitations. The stable tracking pipeline is unchanged.
+
 For dedicated ball tracking, export the
 [`ball11n.pt` football checkpoint](https://huggingface.co/boxerab/gst-python-ml-football)
 as a 1280 px single-class ONNX detector. The checkpoint is listed under

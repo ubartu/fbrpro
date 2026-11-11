@@ -27,6 +27,23 @@ class InMemoryHandler(video_ui.ReviewHandler):
 
 
 class ReviewServerTests(unittest.TestCase):
+    def test_statistics_are_separate_read_only_requests_with_origin_guard(self):
+        from test_video_statistics import tracking
+        data = json.dumps({"tracking": tracking(), "context": {}}).encode()
+        headers = {"X-FBRPRO-Video": "1", "Content-Type": "application/json"}
+        with patch.object(video_ui.video_tracking, "run") as detector:
+            status, _, body = self.call("POST", "/api/statistics", headers=headers, body=data)
+        detector.assert_not_called()
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["version"], "fbrpro-video-stats-v1")
+        self.assertEqual(self.call("POST", "/api/statistics", body=data)[0], 403)
+        self.assertEqual(self.call("POST", "/api/statistics", headers=headers, body=b"{}")[0], 400)
+        self.server.job.acquire()
+        try:
+            self.assertEqual(self.call("POST", "/api/statistics", headers=headers, body=data)[0], 409)
+        finally:
+            self.server.job.release()
+
     def test_geometry_review_endpoint_recalculates_without_running_detector(self):
         tracking = {"version": "fbrpro-video-tracking-v1", "coordinate_length_m": 105,
                     "coordinate_width_m": 68, "frames": []}

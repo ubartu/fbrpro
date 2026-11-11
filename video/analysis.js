@@ -494,6 +494,7 @@ function setupTracking(data,name){
   $("track-chip").textContent=data.frames.length?nf.format(data.frames.length)+" frames"+
     (positive(data.sample_fps)?" · "+fmt(data.sample_fps)+" fps target":""):"No frames";
   showSession();showOverlayControl();setupIdentityRoster();configureTimeline();renderTrackingCoverage();renderMetrics();
+  if(typeof setupVideoStatistics==="function")setupVideoStatistics();
 }
 $("tracking-file").addEventListener("change",async e=>{
   const f=e.target.files[0],request=++trackingRequest;
@@ -916,6 +917,7 @@ $("video-file").addEventListener("change",e=>{
   $("calibration-file").value="";
   if(previewFile&&previewFile!==activeVideoFile){
     tracking=undefined;previewFile=undefined;lastFrame=undefined;
+    if(typeof clearVideoStatistics==="function")clearVideoStatistics();
     mappedFrame=ballFrame=undefined;
     exportedPreview=undefined;
     pitchLayer.replaceChildren();footageLayer.replaceChildren();

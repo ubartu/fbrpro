@@ -311,7 +311,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict):
                     raise ValueError("Choose a tracking report and pitch review")
-                result = reviewed_report(payload.get("tracking"), payload.get("review", {}))
+                result = reviewed_report(payload.get("tracking"), payload.get("review", {}), copy_report=False)
                 self.send_json(HTTPStatus.OK, result)
             except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as exc:
                 self.error(HTTPStatus.BAD_REQUEST, str(exc))

@@ -41,8 +41,9 @@ function setupGeometry(){
   if(tracking.pitch_segments?.some(x=>x.id===selected))$("geometry-segment").value=selected;
   else $("geometry-segment").value=tracking.pitch_segments?.[0]?.id||"";
   const selectedTeam=$("geometry-team").value;
-  const teams=new Set(tracking.frames.flatMap(f=>f.objects.filter(o=>o.object_type==="player"&&!probableReferee(o))
-    .map(o=>o.team_id||o.inferred_team).filter(Boolean)));
+  const teams=new Set();
+  for(const frame of tracking.frames)for(const o of frame.objects)
+    if(o.object_type==="player"&&!probableReferee(o)&&(o.team_id||o.inferred_team))teams.add(o.team_id||o.inferred_team);
   $("geometry-team").replaceChildren();
   for(const team of teams)option($("geometry-team"),team,geometryTeamName(team));
   $("geometry-team").value=teams.has(selectedTeam)?selectedTeam:[...teams][0]||"";
@@ -51,7 +52,7 @@ function setupGeometry(){
 function showGeometryFrame(frame){
   const g=frame.pitch_geometry;
   if(!g){status("geometry-current","");return;}
-  const statusName={rejected_jump:"Mapping jump rejected",mapping_unavailable:"No trusted pitch mapping",
+  const statusName={rejected_jump:"Pitch estimate shown; movement stats withheld for mapping instability",mapping_unavailable:"No trusted pitch mapping",
     camera_checked:"Camera movement checked",new_segment:"New camera segment",insufficient_overlap:"New segment: limited overlap"};
   const errors=frame.objects.filter(o=>o.observed&&finite(o.position_uncertainty_m)).map(o=>o.position_uncertainty_m);
   status("geometry-current",[

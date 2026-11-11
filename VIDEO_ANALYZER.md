@@ -71,8 +71,14 @@ New tracking runs include camera-segment IDs, a ground-plane mapping, continuity
 checks and a local position-sensitivity estimate in metres. Fresh mappings are
 compared with the preceding map transported by image camera motion. A symmetric
 180-degree solution can be corrected within a continuous segment. Unsupported
-jumps are rejected; repeated failures reacquire a new segment. Camera cuts,
+jumps are excluded from movement measurements; repeated failures reacquire a new segment. Camera cuts,
 tracking gaps and insufficient overlap do not establish orientation across views.
+These measurement checks do not suppress video detections or erase the current
+pitch replay estimates. The detector retains its independently fitted pitch
+boundary, and uncertain pitch estimates remain labelled as unsuitable for
+movement statistics. Geometry reuses the tracker's camera-motion result rather
+than running a second feature-flow pass. Fresh reports are processed in place
+to avoid duplicating the complete tracking history in memory.
 
 Open **Pitch orientation and movement setup** in the movement evidence panel:
 

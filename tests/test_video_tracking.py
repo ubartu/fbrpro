@@ -19,6 +19,65 @@ def person(x):
 class TrackingTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                          "optional vision dependencies not installed")
+    def test_measurement_rejection_preserves_video_and_pitch_tracks_with_one_motion_pass(self):
+        import cv2
+        import numpy as np
+
+        frame = np.zeros((100, 160, 3), np.uint8)
+        cap = Mock()
+        cap.isOpened.return_value = True
+        cap.read.side_effect = [(True, frame)]*3+[(False, None)]
+        stamps = iter([0, 100, 200])
+        cap.get.side_effect = lambda key: (next(stamps) if key == cv2.CAP_PROP_POS_MSEC else
+            {cv2.CAP_PROP_FRAME_WIDTH: 160, cv2.CAP_PROP_FRAME_HEIGHT: 100,
+             cv2.CAP_PROP_POS_FRAMES: 1}.get(key, 25))
+        window = {"period": 1, "video_start_ms": 0, "video_end_ms": 300}
+        plan = {"version": "fbrpro-video-plan-v1", "match_id": "m", "video_id": "v", "plan_id": "p",
+                "alignment_segments": [{**window, "id": "s", "kind": "preview",
+                                        "match_start_ms": 0, "match_end_ms": 300}],
+                "clips": [{**window, "id": "c", "segment_id": "s"}]}
+        geometry = Mock()
+        geometry.update.side_effect = lambda *args, **kwargs: (None, {
+            "segment_id": "c:geometry:0", "usable": False, "drift_m": 4.,
+            "continuity_status": "rejected_jump", "orientation_status": "unresolved"})
+        motion = Mock()
+        motion.update.return_value = np.array([[1., 0, 0], [0, 1., 0]])
+        model = Mock()
+        model.fit.return_value = (np.eye(3), .1, .2)
+        model.last_quality = None
+        model.engine.description.return_value = {}
+        detections = [person(10), Detection("ball", .9, (30, 30, 34, 34))]
+
+        def detect(*args):
+            self.assertIsNotNone(args[4], "Measurement rejection removed the detection boundary")
+            return detections, {"polygon_xy": [[0, 0], [105, 0], [105, 68]], "source": "automatic_landmarks"}, "estimated", 0
+
+        with TemporaryDirectory() as directory:
+            source = Path(directory)/"video"
+            source.write_bytes(b"test video")
+            with (patch.object(cv2, "VideoCapture", return_value=cap),
+                  patch("football_normalizer.video_tracking.YoloX"),
+                  patch("football_normalizer.video_tracking.PitchModel", return_value=model),
+                  patch("football_normalizer.video_tracking.CameraMotion", return_value=motion),
+                  patch("football_normalizer.video_tracking.PitchContinuity", return_value=geometry),
+                  patch("football_normalizer.video_tracking.pitch_detections", side_effect=detect)):
+                data = run(source, plan, source, {"coordinate_length_m": 105, "coordinate_width_m": 68, "segments": []},
+                           pitch_model=source)
+        self.assertEqual(motion.update.call_count, 3)
+        self.assertEqual(len(data["frames"]), 3)
+        ids = []
+        for f in data["frames"]:
+            self.assertFalse(f["pitch_geometry"]["usable"])
+            self.assertFalse(f["pitch_geometry"]["measurement_mapping_available"])
+            self.assertEqual(f["calibration_status"], "automatic")
+            self.assertTrue(all(o["observed"] and o["x_m"] is not None for o in f["objects"]))
+            self.assertEqual(len(f["objects"]), 2)
+            ids.append([o["track_id"] for o in f["objects"]])
+        self.assertEqual(ids[0], ids[1])
+        self.assertEqual(ids[1], ids[2])
+
+    @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
+                         "optional vision dependencies not installed")
     def test_camera_motion_estimates_a_pan_and_resets_between_shots(self):
         import cv2
         import numpy as np

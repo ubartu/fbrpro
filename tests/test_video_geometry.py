@@ -127,6 +127,19 @@ class SpatialSummaryTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"), "vision dependencies needed")
 class PitchContinuityTests(unittest.TestCase):
+    def test_existing_tracker_motion_is_reused_without_second_feature_pass(self):
+        import cv2
+        import numpy as np
+        g = PitchContinuity(cv2, np, 105, 68, "clip")
+        g.motion = Mock()
+        image = np.zeros((680, 1050, 3), np.uint8)
+        h = np.diag([.1, .1, 1.])
+        g.update(image, 0, h, camera_transform=None)
+        matrix, quality = g.update(image, 100, h, camera_transform=np.array([[1., 0, 0], [0, 1., 0]]))
+        self.assertTrue(quality["usable"])
+        self.assertIsNotNone(matrix)
+        g.motion.update.assert_not_called()
+
     def test_known_pan_zoom_and_symmetric_solution_keep_ground_points_fixed(self):
         import cv2
         import numpy as np

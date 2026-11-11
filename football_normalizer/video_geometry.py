@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 VERSION = "fbrpro-pitch-geometry-v1"
+_ESTIMATE_MOTION = object()
 
 
 def number(x):
@@ -35,9 +36,9 @@ class PitchContinuity:
         self.boxes = ()
         self.epoch += 1
 
-    def update(self, image, stamp, matrix, *, reviewed=False):
+    def update(self, image, stamp, matrix, *, reviewed=False, camera_transform=_ESTIMATE_MOTION):
         cv2, np = self.cv2, self.np
-        motion = self.motion.update(image, self.boxes)
+        motion = self.motion.update(image, self.boxes) if camera_transform is _ESTIMATE_MOTION else camera_transform
         dt = stamp-self.stamp if self.stamp is not None else None
         self.stamp = stamp
         continuous = self.previous is not None and motion is not None and dt is not None and 0 < dt <= 750
@@ -154,14 +155,14 @@ def validate_review(review, report):
     return {"segments": settings, "directions": directions}
 
 
-def reviewed_report(report, review=None):
-    """Apply review idempotently to a copy, retaining source coordinates."""
+def reviewed_report(report, review=None, *, copy_report=True):
+    """Apply review idempotently, copying unless ownership is transferred."""
     if (not isinstance(report, dict) or report.get("version") != "fbrpro-video-tracking-v1"
             or not isinstance(report.get("frames"), list)
             or not all(number(report.get(k)) and report[k] > 0 for k in ("coordinate_length_m", "coordinate_width_m"))):
         raise ValueError("Choose a tracking report with pitch dimensions")
     review = validate_review(review if review is not None else report.get("pitch_review", {}), report)
-    result = deepcopy(report)
+    result = deepcopy(report) if copy_report else report
     length, width = result["coordinate_length_m"], result["coordinate_width_m"]
     for frame in result["frames"]:
         g = frame.get("pitch_geometry") or {}

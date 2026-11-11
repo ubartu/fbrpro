@@ -694,17 +694,6 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                         cal = Calibration(segment.id, None, None, matrix, "automatic", rms, check)
                         counters["automatically_calibrated_frames"] += 1
                         automatic_quality = getattr(automatic_model, "last_quality", None)
-                geometry_quality = None
-                if img is not None:
-                    if geometry_guard is None:
-                        geometry_guard = PitchContinuity(cv2, np, length, width, clip["id"])
-                    trusted_cal = cal is not None and cal.status in ("verified", "automatic")
-                    matrix, geometry_quality = geometry_guard.update(
-                        img, video_ms, cal.matrix if trusted_cal else None,
-                        reviewed=trusted_cal and cal.status == "verified")
-                    geometry_quality["image_to_pitch"] = matrix.tolist() if matrix is not None else None
-                    if trusted_cal:
-                        cal = replace(cal, matrix=matrix) if matrix is not None else None
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
                     cv2, np, img, detector, cal, length, width)
                 if boundary and boundary["source"] == "automatic_landmarks" and automatic_quality:
@@ -716,10 +705,23 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 counters["off_pitch_candidates"] += off_pitch
                 counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
                 motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
+                # Detection/association keep the current independently fitted
+                # pitch boundary. Measurement rejection must not erase people
+                # or the ball from the video, or interrupt their identities.
+                geometry_quality = None
+                if img is not None:
+                    if geometry_guard is None:
+                        geometry_guard = PitchContinuity(cv2, np, length, width, clip["id"])
+                    trusted_cal = cal is not None and cal.status in ("verified", "automatic")
+                    matrix, geometry_quality = geometry_guard.update(
+                        img, video_ms, cal.matrix if trusted_cal else None,
+                        reviewed=trusted_cal and cal.status == "verified", camera_transform=motion)
+                    if trusted_cal and matrix is not None:
+                        cal = replace(cal, matrix=matrix)
+                    geometry_quality["image_to_pitch"] = cal.matrix.tolist() if trusted_cal else None
+                    geometry_quality["measurement_mapping_available"] = matrix is not None
                 tracks = tracker.update(detections, video_ms, motion)
                 rows = [object_row(t, cal, length, width, identities) for t in tracks]
-                if geometry_guard is not None:
-                    geometry_guard.boxes = [d.box for d in detections if d.object_type == "player"]
                 for row in rows:
                     row["position_uncertainty_m"] = position_quality(np, row, cal, automatic_quality, img.shape) if row["observed"] and img is not None else None
                     if row["position_uncertainty_m"] is not None and geometry_quality and geometry_quality["drift_m"] is not None:
@@ -833,7 +835,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                              "follow_camera": c.landmarks is not None,
                              "fit_rms_m": c.rms_m, "check_max_m": c.check_max_m} for c in calibrations],
             "clips": summaries, "frames": frames}
-    return reviewed_report(report)
+    return reviewed_report(report, copy_report=False)
 
 
 def canonical_rows(report):

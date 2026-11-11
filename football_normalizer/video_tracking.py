@@ -538,7 +538,7 @@ def follow_pitch_boundary(cv2, np, frame, boundary, motion, age_ms):
     return {"polygon_xy": polygon.round(2).tolist(), "source": "tracked_pitch_outline", "anchor_age_ms": age_ms}
 
 
-def object_row(track, calibration, length, width, identities):
+def object_row(track, calibration, length, width, identities, *, reference_calibration=None):
     d = track.last
     player, team = identities.get(track.id, (None, None)) if d.object_type == "player" else (None, None)
     xy = None
@@ -551,7 +551,7 @@ def object_row(track, calibration, length, width, identities):
                 xy, status = None, "off_pitch"
             elif d.object_type == "ball" and status == "verified":
                 status = "ball_ground_assumed"
-    return {"track_id": track.id, "object_type": d.object_type,
+    row = {"track_id": track.id, "object_type": d.object_type,
             "player_id": player, "team_id": team, "observed": not track.missing,
             "estimated": False, "visibility": "missing" if track.missing else "observed",
             "confidence": None if track.missing else d.confidence,
@@ -559,6 +559,11 @@ def object_row(track, calibration, length, width, identities):
             "x_m": None if not xy else round(xy[0], 3), "y_m": None if not xy else round(xy[1], 3),
             "projection_status": status, "kit_color_hint": None,
             "on_pitch": d.object_type == "player" and not track.missing}
+    if xy is not None and reference_calibration is not None:
+        raw = reference_calibration.project(d.anchor())
+        if raw is not None:
+            row["position_disagreement_m"] = round(math.dist(xy, raw), 3)
+    return row
 
 
 def small_frame(cv2, frame):
@@ -712,6 +717,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     if isinstance(automatic_model, LinePitchModel):
                         automatic_model.reset()
                 automatic_quality = None
+                position_cal = cal
                 if (pitch_model is not None or pitch_lines_model is not None) and (cal is None or cal.status != "verified"):
                     if automatic_model is None:
                         model_class = LinePitchModel if pitch_lines_model else PitchModel
@@ -723,8 +729,14 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     if fit is not None:
                         matrix, rms, check = fit
                         cal = Calibration(segment.id, None, None, matrix, "automatic", rms, check)
+                        position_cal = cal
                         counters["automatically_calibrated_frames"] += 1
                         automatic_quality = getattr(automatic_model, "last_quality", None)
+                    if isinstance(automatic_model, LinePitchModel):
+                        position_matrix, projection_quality = automatic_model.position_fit(fit, img.shape, video_ms)
+                        if position_matrix is not None:
+                            position_cal = replace(cal, matrix=position_matrix)
+                            automatic_quality = {**automatic_quality, **projection_quality}
                 detections, boundary, pitch_status, off_pitch = pitch_detections(
                     cv2, np, img, detector, cal, length, width)
                 if boundary and boundary["source"] == "automatic_landmarks" and automatic_quality:
@@ -757,7 +769,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 counters["off_pitch_candidates"] += off_pitch
                 counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
                 tracks = tracker.update(detections, video_ms, motion)
-                rows = [object_row(t, cal, length, width, identities) for t in tracks]
+                reference_cal = cal if automatic_quality and automatic_quality.get("projection_disagreement_m") else None
+                rows = [object_row(t, position_cal, length, width, identities, reference_calibration=reference_cal)
+                        for t in tracks]
                 for track, row in zip(tracks, rows):
                     color = track.last.kit_color
                     if not track.missing and color is not None and color == track.kit_sample:
@@ -775,7 +789,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                                 for score, box in ball_detector.recover(img, boundary, center)],
                     )
                     if ball is not None:
-                        rows.append(object_row(ball, cal, length, width, identities))
+                        rows.append(object_row(ball, position_cal, length, width, identities,
+                                               reference_calibration=reference_cal))
                         if ball.recovered:
                             counters["ball_crop_recoveries"] += 1
                             rows[-1]["detection_source"] = "ball_crop"

@@ -225,7 +225,10 @@ def prepare(report, context=None):
                 live = interval.get("live_play") is True
         ground = context.get("ground_ball_reviewed") is True or bool(episode and episode.get("ground_ball_reviewed") is True)
         ground |= any(r.get("period", 1) == period and r["start_ms"] <= t < r["end_ms"] and r.get("reviewed") is True for r in context.get("ground_ball_intervals", []))
-        cut = bool(f.get("camera_cut_suspected")) or stamps[t] != 1
+        line_quality = f.get("calibration_line_quality")
+        if not isinstance(line_quality, dict):
+            line_quality = {}
+        cut = bool(f.get("camera_cut_suspected") or line_quality.get("projection_reanchored")) or stamps[t] != 1
         if previous and (cut or selection != previous_selection or f.get("clip_id") != previous.get("clip_id") or period != previous.get("period", 1)
                          or not 0 < t-previous["video_time_ms"] <= max_gap):
             epoch += 1
@@ -269,6 +272,9 @@ def prepare(report, context=None):
             error = row.get("position_uncertainty_m")
             if not finite(error):
                 error = max(errors)+.25 if errors else None
+            disagreement = row.get("position_disagreement_m", line_quality.get("projection_disagreement_m"))
+            if error is not None and error >= 0 and finite(disagreement) and disagreement > 0:
+                error += disagreement
             if error is None or error < 0 or error > 3:
                 excluded["uncertain_pitch_mapping"] += 1
                 continue
@@ -319,4 +325,4 @@ def prepare(report, context=None):
             "quality": {"source_frames": len(raw), "usable_position_frames": sum(bool(f["players"]) for f in output),
                         "excluded_observations": dict(excluded), "dimensions_assumed": not verified,
                         "mapping_reviewed": mapping_reviewed, "orientation_confirmed": context.get("orientation_confirmed") is True,
-                        "uncertainty_method": "Stored sensitivity when present; otherwise frame fitting/check residual + 0.25 m proxy. Not a confidence interval."}}
+                        "uncertainty_method": "Stored sensitivity or frame fitting/check residual + 0.25 m, plus any temporal projection disagreement."}}

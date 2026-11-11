@@ -6,6 +6,39 @@ from .video_inference import load_inference
 from .video_motion import CameraMotion
 
 
+def stabilize_projection(cv2, np, previous, current, motion, elapsed_ms, length, width):
+    """Limit a refit's correction in ground metres after transporting camera motion."""
+    transported = previous @ np.linalg.inv(np.vstack((motion, [0, 0, 1.])))
+    pixels = np.array([(x, y) for y in np.linspace(36, 342, 7)
+                       for x in np.linspace(32, 608, 9)], dtype=np.float64)
+    before = cv2.perspectiveTransform(pixels[:, None], transported)[:, 0]
+    fresh = cv2.perspectiveTransform(pixels[:, None], current)[:, 0]
+    visible = (np.isfinite(before).all(axis=1) & np.isfinite(fresh).all(axis=1)
+               & (before >= 0).all(axis=1) & (before <= [length, width]).all(axis=1)
+               & (fresh >= 0).all(axis=1) & (fresh <= [length, width]).all(axis=1))
+    if visible.sum() < 6:
+        return None, None
+    pixels, before, fresh = pixels[visible], before[visible], fresh[visible]
+    if cv2.contourArea(cv2.convexHull(pixels.astype(np.float32))) < 640*360*.01:
+        return None, None
+    shift = np.linalg.norm(fresh-before, axis=1)
+    # A different pitch basis or unreliable camera match needs a new segment.
+    if np.median(shift) > 5:
+        return None, None
+    limit = .002 * elapsed_ms
+    if shift.max() <= limit:
+        return current, 0.
+    targets = before+(fresh-before)*(limit/shift.max())
+    matrix, _ = cv2.findHomography(pixels, targets, 0)
+    if matrix is None or not np.isfinite(matrix).all() or np.linalg.matrix_rank(matrix) != 3:
+        return None, None
+    stabilized = cv2.perspectiveTransform(pixels[:, None], matrix)[:, 0]
+    if not np.isfinite(stabilized).all() or np.linalg.norm(stabilized-before, axis=1).max() > limit*1.1:
+        return None, None
+    disagreement = float(np.quantile(np.linalg.norm(stabilized-fresh, axis=1), .9))
+    return matrix, disagreement
+
+
 LINE_CLASSES = (
     "Big rect. left bottom", "Big rect. left main", "Big rect. left top",
     "Big rect. right bottom", "Big rect. right main", "Big rect. right top",
@@ -178,6 +211,34 @@ class LinePitchModel:
         self.last_stamp = None
         self.anchor_stamp = None
         self.followed = 0
+        self.frame_motion = None
+        self.projection_fit = None
+        self.projection_stamp = None
+
+    def position_fit(self, fit, shape, stamp):
+        """Produce replay coordinates without changing the fit used to detect objects."""
+        if fit is None:
+            self.projection_fit = self.projection_stamp = None
+            return None, {}
+        h, w = shape[:2]
+        np = self.np
+        matrix = fit[0] @ np.diag([w/640, h/360, 1.])
+        previous = self.projection_fit
+        quality = {}
+        if previous is not None:
+            elapsed = stamp-self.projection_stamp
+            stabilized = None
+            if self.frame_motion is not None and 0 < elapsed <= 250:
+                stabilized, disagreement = stabilize_projection(
+                    self.cv2, np, previous, matrix, self.frame_motion, elapsed,
+                    self.lines["Side line top"][1][0], self.lines["Side line left"][1][1])
+            if stabilized is None:
+                quality["projection_reanchored"] = True
+            else:
+                matrix = stabilized
+                quality["projection_disagreement_m"] = round(disagreement, 3)
+        self.projection_fit, self.projection_stamp = matrix, stamp
+        return matrix @ np.diag([640/w, 360/h, 1.]), quality
 
     def follow(self, image, matrix):
         cv2, np = self.cv2, self.np
@@ -234,6 +295,7 @@ class LinePitchModel:
         self.last_quality = None
         image = cv2.resize(frame, (640, 360))
         motion = self.motion.update(image, ()) if time_ms is not None else None
+        self.frame_motion = motion
         elapsed = time_ms-self.last_stamp if time_ms is not None and self.last_stamp is not None else None
         self.last_stamp = time_ms
         followed_fit = None

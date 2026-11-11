@@ -10,6 +10,30 @@ from football_normalizer.video_tracking import Calibration, calibrated_boundary
 @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                      "optional vision dependencies not installed")
 class AutomaticCalibrationTests(unittest.TestCase):
+    def test_fresh_projection_limits_ground_jump_after_camera_motion(self):
+        import cv2
+        import numpy as np
+
+        model = LinePitchModel.__new__(LinePitchModel)
+        model.cv2, model.np = cv2, np
+        model.lines = pitch_lines(105, 68)
+        model.motion = Mock()
+        model.reset()
+        first = np.diag([105/640, 68/360, 1.])
+        model.position_fit((first, .2, .3), (360, 640), 19120)
+        model.frame_motion = np.array([[1., 0, 3], [0, 1., 2]])
+        transported = first @ np.linalg.inv(np.vstack((model.frame_motion, [0, 0, 1.])))
+        fresh = np.array([[1., 0, 0], [0, 1., 1.3], [0, 0, 1.]]) @ transported
+        fixed, quality = model.position_fit((fresh, .2, .3), (360, 640), 19200)
+        mark = np.array([[[323., 182.]]])
+        np.testing.assert_allclose(cv2.perspectiveTransform(mark, fixed)[0, 0], [52.5, 34.16], atol=.01)
+        np.testing.assert_allclose(cv2.perspectiveTransform(mark, fresh)[0, 0], [52.5, 35.3], atol=.01)
+        self.assertAlmostEqual(quality["projection_disagreement_m"], 1.14, places=2)
+        model.frame_motion = None
+        result, quality = model.position_fit((fresh, .2, .3), (360, 640), 19320)
+        np.testing.assert_allclose(result, fresh)
+        self.assertTrue(quality["projection_reanchored"])
+
     def test_failed_semantic_refresh_keeps_line_supported_map_but_expires(self):
         import cv2
         import numpy as np

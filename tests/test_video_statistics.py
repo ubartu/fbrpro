@@ -61,6 +61,18 @@ class VideoStatisticsTests(unittest.TestCase):
         self.assertEqual(sum(any(x["id"] == "p0" for x in f["players"]) for f in p["frames"]), 20)
         self.assertEqual(p["quality"]["excluded_observations"]["missing_pitch_mapping"], 60)
 
+    def test_projection_reanchor_breaks_intervals_and_disagreement_increases_error(self):
+        data = tracking()
+        data["frames"][1]["calibration_line_quality"] = {"projection_disagreement_m": 1.2}
+        data["frames"][1]["objects"][1]["position_disagreement_m"] = .2
+        data["frames"][2]["calibration_line_quality"] = {"projection_reanchored": True}
+        frames = prepare(data)["frames"]
+        self.assertAlmostEqual(frames[1]["players"][0]["error_m"], 1.55)
+        self.assertAlmostEqual(frames[1]["players"][1]["error_m"], .55)
+        self.assertTrue(frames[2]["cut"])
+        self.assertNotEqual(frames[1]["segment_id"], frames[2]["segment_id"])
+        self.assertEqual(len(frames[2]["players"]), 6)
+
     def test_ambiguous_balls_identities_and_referees_are_excluded(self):
         data = tracking()
         for f in data["frames"]:

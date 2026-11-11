@@ -62,7 +62,9 @@ and acceleration/deceleration bout magnitude 2.5 m/s²; context can override the
 These are measurement definitions, not player-role thresholds.
 
 When stored point sensitivity is absent, analysis uses frame calibration
-fit/check residual plus a 0.25 m proxy. This does not establish real-world
+fit/check residual plus a 0.25 m proxy. The analysis adds disagreement between
+the fresh and stabilized mappings at each observed position, and breaks motion
+intervals when the mapping is re-established. This does not establish real-world
 positional accuracy or a confidence interval. Automatic calibration can contain
 systematic error; a checkbox records analyst review, not independent validation.
 

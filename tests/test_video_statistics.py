@@ -45,6 +45,21 @@ class VideoStatisticsTests(unittest.TestCase):
         data["dimensions_assumed"] = True
         self.assertNotEqual(a["analysis_fingerprint"], analyze(data)["analysis_fingerprint"])
 
+    def test_snapshot_only_lists_simultaneously_visible_on_pitch_players(self):
+        data = tracking()
+        for i, frame in enumerate(data["frames"]):
+            row = frame["objects"][0]
+            row["track_id"] = "early" if i < 15 else "late"
+            frame["objects"].append({**row, "track_id": "sideline", "on_pitch": False})
+        result = analyze(data, {"identities": {"early": {"team_id": "b"}}})
+        snapshot = result["lineup_snapshot"]
+        frame = next(f for f in data["frames"] if f["video_time_ms"] == snapshot["t_ms"])
+        self.assertEqual(set(snapshot["track_ids"]), {o["track_id"] for o in frame["objects"] if o.get("on_pitch") is not False})
+        teams = {p["id"]: p["team"] for p in result["players"]}
+        self.assertNotIn("sideline", teams)
+        self.assertEqual(teams["early"], "b")
+        self.assertEqual(teams["late"], "a")
+
     def test_period_direction_needs_explicit_orientation_review(self):
         data = tracking()
         context = {"directions": {"1": {"a": 1}}}

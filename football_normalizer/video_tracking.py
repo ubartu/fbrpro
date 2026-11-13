@@ -23,9 +23,10 @@ from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
 from .video_pitch_lines import LinePitchModel
 from .video_roles import annotate_video_roles
+from .video_track_links import reconnect_shot
 
 VERSION = "fbrpro-video-tracking-v1"
-TRACK_ID_SCOPE = "pitch-v2"
+TRACK_ID_SCOPE = "pitch-v4"
 DEFAULT_SAMPLE_FPS = 10.0
 MAX_FULL_VIDEO_MS = 6 * 60 * 60 * 1000
 
@@ -157,13 +158,43 @@ class Track:
     missing: bool = False
     previous: tuple[Detection, int] | None = None
     kit_sample: str | None = None
+    occluded: bool = False
+
+
+def _recovery_cost(track, detection, time_ms, frame_size):
+    """Compare a returning box with the trajectory before a brief overlap."""
+    if frame_size is not None:
+        frame_width, frame_height = frame_size
+        if any(l <= 4 or t <= 4 or r >= frame_width-5 or b >= frame_height-5
+               for l, t, r, b in (track.last.box, detection.box)):
+            return None  # Players entering or leaving the image need separate evidence.
+    previous, previous_ms = track.previous
+    ax, ay = track.last.anchor()
+    bx, by = previous.anchor()
+    height = max(12, track.last.box[3]-track.last.box[1])
+    height_ratio = (detection.box[3]-detection.box[1])/height
+    if not .60 <= height_ratio <= 1.65:
+        return None
+    last_kit = track.last.kit_color
+    same_kit = last_kit is not None and last_kit == track.kit_sample == detection.kit_color
+    if last_kit is not None and last_kit == track.kit_sample and detection.kit_color and not same_kit:
+        return None
+    vx, vy = ax-bx, ay-by
+    factor = min((time_ms-track.seen_ms)/max(1, track.seen_ms-previous_ms),
+                 1.8*height/max(1, math.hypot(vx, vy)))
+    x, y = detection.anchor()
+    distance = math.hypot(x-ax-vx*factor, y-ay-vy*factor)/height
+    if distance > (.85 if same_kit else .55):
+        return None
+    return distance + .25*abs(math.log(height_ratio)) - (.20 if same_kit else 0)
 
 
 class Tracker:
     """Conservative one-to-one image association. No inferred missing positions."""
-    def __init__(self, clip_id, max_gap_ms=800, *, id_scope=None):
+    def __init__(self, clip_id, max_gap_ms=800, *, id_scope=None, frame_size=None):
         self.id_prefix = f"{clip_id}:{id_scope}" if id_scope else clip_id
         self.max_gap_ms = max_gap_ms
+        self.frame_size = frame_size
         self.active = []
         self.next_id = 1
 
@@ -174,7 +205,9 @@ class Tracker:
         return sorted(options)
 
     def update(self, detections, time_ms, camera_transform=None):
-        self.active = [t for t in self.active if time_ms-t.seen_ms <= self.max_gap_ms]
+        recovery_gap_ms = max(self.max_gap_ms, min(2*self.max_gap_ms, 1600))
+        self.active = [t for t in self.active if time_ms-t.seen_ms <= (
+            recovery_gap_ms if t.occluded else self.max_gap_ms)]
         if camera_transform is not None:
             def warp(detection):
                 x1, y1, x2, y2 = detection.box
@@ -187,7 +220,7 @@ class Tracker:
                 if track.previous:
                     previous, seen = track.previous
                     track.previous = (warp(previous), seen)
-        options = []
+        options, predicted_boxes = [], []
         for i, t in enumerate(self.active):
             dx = dy = 0.0
             elapsed = time_ms-t.seen_ms
@@ -198,6 +231,9 @@ class Tracker:
                 dx, dy = (ax-bx)*factor, (ay-by)*factor
             b = t.last.box
             predicted = (b[0]+dx, b[1]+dy, b[2]+dx, b[3]+dy)
+            predicted_boxes.append(predicted)
+            if elapsed > self.max_gap_ms:
+                continue
             scale = max(12, b[2]-b[0], b[3]-b[1])
             if t.last.object_type == "ball":
                 scale = max(scale, 35)
@@ -213,17 +249,40 @@ class Tracker:
                                     and d.kit_color and t.kit_sample != d.kit_color)
                     options.append((distance + (1-overlap)*.60 + (.45 if kit_conflict else 0), i, j))
         used_tracks, used_detections = set(), set()
-        for _, i, j in self.assign(options, len(detections)):
-            if i in used_tracks or j in used_detections:
-                continue
+
+        def match(i, j):
             t = self.active[i]
             t.previous = (t.last, t.seen_ms)
             t.kit_sample = t.last.kit_color
             t.last, t.seen_ms = detections[j], time_ms
+            t.occluded = False
             used_tracks.add(i)
             used_detections.add(j)
+
+        for _, i, j in self.assign(options, len(detections)):
+            if i not in used_tracks and j not in used_detections:
+                match(i, j)
+
+        returns = []
+        for i, track in enumerate(self.active):
+            if i in used_tracks or not track.occluded:
+                continue
+            for j, detection in enumerate(detections):
+                if j in used_detections or detection.object_type != "player":
+                    continue
+                cost = _recovery_cost(track, detection, time_ms, self.frame_size)
+                if cost is not None:
+                    returns.append((cost, i, j))
+        for cost, i, j in returns:
+            # Require an unambiguous choice in both directions before reusing an ID.
+            if all(c > cost+.22 for c, a, b in returns if (a == i or b == j) and (a, b) != (i, j)):
+                match(i, j)
+
+        observed_people = [d.box for j, d in enumerate(detections) if j in used_detections and d.object_type == "player"]
         for i, t in enumerate(self.active):
             t.missing = i not in used_tracks
+            if t.missing and not t.occluded and t.previous and t.last.object_type == "player":
+                t.occluded = any(max(iou(t.last.box, box), iou(predicted_boxes[i], box)) > .10 for box in observed_people)
         for j, detection in enumerate(detections):
             if j not in used_detections:
                 self.active.append(Track(f"{self.id_prefix}:{self.next_id}", detection, time_ms))
@@ -538,6 +597,78 @@ def follow_pitch_boundary(cv2, np, frame, boundary, motion, age_ms):
     return {"polygon_xy": polygon.round(2).tolist(), "source": "tracked_pitch_outline", "anchor_age_ms": age_ms}
 
 
+class PitchOverlay:
+    """Display model edges using a short, paint-checked camera alignment."""
+
+    def __init__(self, cv2, np, length, width):
+        self.cv2, self.np = cv2, np
+        self.length, self.width = length, width
+        self.reset()
+
+    def reset(self):
+        self.previous = self.anchor = self.quality = self.stamp = None
+
+    def update(self, frame, stamp, calibration, quality, motion, check):
+        cv2, np = self.cv2, self.np
+        matrix = None
+        source = None
+        if calibration is not None and calibration.status == "verified":
+            self.reset()
+            matrix, source = calibration.matrix, "verified_calibration"
+        elif quality and quality.get("matched_line_names") and calibration is not None and (
+                quality.get("projection_disagreement_m", 0) <= .35 or
+                check is not None and check(frame, calibration.matrix, quality)):
+            matrix = calibration.matrix
+            propagated = quality.get("method") == "semantic_lines_flow"
+            source = "camera_followed" if propagated else "stabilized_calibration"
+            if not propagated:
+                self.anchor, self.quality = stamp, quality
+        if matrix is None and (check is not None and motion is not None and self.previous is not None
+                               and self.anchor is not None and 0 < stamp-self.stamp <= 250
+                               and stamp-self.anchor <= 750):
+            candidate = self.previous @ np.linalg.inv(np.vstack((motion, [0, 0, 1.])))
+            if check(frame, candidate, self.quality):
+                matrix, source = candidate, "camera_followed"
+        if matrix is None:
+            self.reset()
+            return None
+        if source != "verified_calibration":
+            self.previous, self.stamp = matrix, stamp
+
+        h, w = frame.shape[:2]
+        ground = np.array([[0., 0., 1.], [self.length, 0., 1.],
+                           [self.length, self.width, 1.], [0., self.width, 1.]])
+        try:
+            points = ground @ np.linalg.inv(matrix).T
+        except np.linalg.LinAlgError:
+            self.reset()
+            return None
+        if not np.isfinite(points).all():
+            return None
+        depth_sign = np.sign((matrix @ [w/2, h*.8, 1.])[2])
+        points *= depth_sign
+        segments = []
+        for a, b in zip(points, np.roll(points, -1, axis=0)):
+            # Clip in homogeneous space so off-screen corners behind the camera
+            # cannot turn into stray lines or artificial edges along the screen.
+            start, end = 0., 1.
+            for plane in ((0, 0, 1), (1, 0, 0), (-1, 0, w-1), (0, 1, 0), (0, -1, h-1)):
+                left, right = a @ plane, b @ plane
+                if left < 0 and right < 0:
+                    break
+                if left < 0:
+                    start = max(start, left/(left-right))
+                elif right < 0:
+                    end = min(end, left/(left-right))
+            else:
+                clipped = a + np.array([[start], [end]])*(b-a)
+                if start < end and np.all(clipped[:, 2] > 1e-9):
+                    xy = (clipped[:, :2]/clipped[:, 2, None]).clip([0, 0], [w-1, h-1])
+                    if np.linalg.norm(xy[1]-xy[0]) >= 2:
+                        segments.append(xy.round(2).tolist())
+        return {"source": source, "segments_xy": segments} if segments else None
+
+
 def object_row(track, calibration, length, width, identities, *, reference_calibration=None):
     d = track.last
     player, team = identities.get(track.id, (None, None)) if d.object_type == "player" else (None, None)
@@ -639,14 +770,21 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) if through_eof else None
-        frames, summaries = [], []
+        frames, summaries, track_links = [], [], []
+        reviewed_teams = {track: team for track, (_, team) in identities.items() if team}
+        roster = {player["id"]: player for player in plan.get("identity_roster", plan.get("players", []))}
+        jersey_numbers = {track: roster.get(player, {}).get("shirt_number") for track, (player, _) in identities.items()}
         observed_ids = set()
         for start, end, clip, segment in windows:
             if isinstance(automatic_model, LinePitchModel):
                 automatic_model.reset()
-            tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)), id_scope=scope)
+            tracker = Tracker(clip["id"], max_gap_ms=max(800, round(2000/sample_fps)),
+                              id_scope=scope, frame_size=(frame_width, frame_height))
             ball_tracker = BallTracker(clip["id"], frame_width) if ball_detector else None
             camera_motion = CameraMotion(cv2, np)
+            pitch_overlay = PitchOverlay(cv2, np, length, width)
+            shot_start = len(frames)
+            shot_motion = []
             boundary_reference = boundary_anchor_ms = None
             if not through_eof and not cap.set(cv2.CAP_PROP_POS_MSEC, start):
                 raise ValueError(f"{clip['id']}: decoder cannot seek by video time")
@@ -709,8 +847,11 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     next_sample_ms += 1000/sample_fps
                 period_ms = video_ms if through_eof else segment.period_time(video_ms)
                 if pending_cut:
+                    track_links.extend(reconnect_shot(np, frames[shot_start:], shot_motion, (frame_width, frame_height), reviewed_teams))
+                    shot_start, shot_motion = len(frames), []
                     tracker.reset()
                     camera_motion.reset()
+                    pitch_overlay.reset()
                     boundary_reference = boundary_anchor_ms = None
                     if ball_tracker:
                         ball_tracker.reset()
@@ -746,6 +887,9 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 if ball_detector:
                     detections = [d for d in detections if d.object_type == "player"]
                 motion = camera_motion.update(img, (d.box for d in detections if d.object_type == "player"))
+                check = automatic_model.supports_display if isinstance(automatic_model, LinePitchModel) else None
+                overlay = pitch_overlay.update(img, video_ms, position_cal, automatic_quality, motion, check) if img is not None else None
+                shot_motion.append(motion)
                 fresh_boundary = boundary is not None
                 if boundary is None and img is not None:
                     boundary = follow_pitch_boundary(cv2, np, img, boundary_reference, motion,
@@ -770,13 +914,15 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                 counters["pitch_unavailable_frames"] += pitch_status == "unavailable"
                 tracks = tracker.update(detections, video_ms, motion)
                 reference_cal = cal if automatic_quality and automatic_quality.get("projection_disagreement_m") else None
-                rows = [object_row(t, position_cal, length, width, identities, reference_calibration=reference_cal)
+                rows = [object_row(t, position_cal, length, width, {}, reference_calibration=reference_cal)
                         for t in tracks]
                 for track, row in zip(tracks, rows):
                     color = track.last.kit_color
                     if not track.missing and color is not None and color == track.kit_sample:
                         row["kit_color_hint"] = color
                     if row["observed"] and row["object_type"] == "player" and track.last.confidence >= .35:
+                        if jersey_numbers.get(track.id) is not None:
+                            row["jersey_number"] = jersey_numbers[track.id]
                         appearance = shirt_appearance(cv2, np, img, track.last.box)
                         if appearance is not None:
                             row["_shirt_appearance"] = appearance
@@ -800,13 +946,7 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                     ball_status = ("observed" if any(row["object_type"] == "ball" and row["observed"]
                                                      for row in rows) else "missing")
                 observed_ids.update(t.id for t in tracks if not t.missing and t.last.object_type == "player")
-                seen_players = set()
                 for row in rows:
-                    pid = row["player_id"]
-                    if row["observed"] and pid is not None:
-                        if pid in seen_players:
-                            raise ValueError(f"{clip['id']}: same reviewed player appears twice in a frame")
-                        seen_players.add(pid)
                     if row["observed"]:
                         counters[row["object_type"]] += 1
                     else:
@@ -822,12 +962,14 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
                                "camera_cut_suspected": pending_cut,
                                "camera_motion_compensated": motion is not None,
                                "pitch_boundary_status": pitch_status, "pitch_boundary": boundary,
+                               "pitch_overlay": overlay,
                                "ball_status": ball_status,
                                "off_pitch_candidates": off_pitch, "objects": rows})
                 pending_cut = False
                 sampled += 1
                 if on_progress:
                     on_progress(video_ms)
+            track_links.extend(reconnect_shot(np, frames[shot_start:], shot_motion, (frame_width, frame_height), reviewed_teams))
             summaries.append({"clip_id": clip["id"], "sampled_frames": sampled,
                               "video_start_ms": start, "video_end_ms": end,
                               "decoded_frames": decoded,
@@ -839,6 +981,27 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
         cap.release()
     if set(identities) - observed_ids:
         raise ValueError("Reviewed identity map includes tracks not observed in this run. Regenerate it for the current report.")
+    if identities:
+        for link in track_links:
+            assignment = identities.get(link["from_track_id"])
+            if assignment is None:
+                continue
+            target = link["to_track_id"]
+            previous = identities.get(target, (None, None))
+            if any(a and b and a != b for a, b in zip(previous, assignment)):
+                raise ValueError("Reconnected fragments have conflicting reviewed identities.")
+            identities[target] = tuple(a or b for a, b in zip(previous, assignment))
+        for frame in frames:
+            seen = set()
+            for row in frame["objects"]:
+                if row["object_type"] != "player":
+                    continue
+                player, team = identities.get(row["track_id"], (None, None))
+                if player and row["observed"]:
+                    if player in seen:
+                        raise ValueError(f"{frame['clip_id']}: same reviewed player appears twice in a frame")
+                    seen.add(player)
+                row.update(player_id=player, team_id=team)
     roles = annotate_video_roles(frames, coordinate_length_m=length, coordinate_width_m=width,
                                  dimensions_assumed=bool(calibration_data.get("dimensions_assumed", False)),
                                  shirt_groups=True)
@@ -868,7 +1031,8 @@ def run(video_path, plan, model, calibration_data, *, clip_ids=None, sample_fps=
             "pitch_lines_model_sha256": pitch_lines_hash,
             "ball_tracking": "dedicated" if ball_detector else "generic",
             "identity_policy": "reviewed mappings only; on-pitch detections can include officials",
-            "tracker": "camera_compensated_motion_iou_kit",
+            "tracker": "camera_compensated_motion_iou_kit_with_shot_reconnection",
+            "track_links": track_links,
             "pitch_policy": "person foot point must be in the verified or estimated pitch; no tracks if neither is available",
             "kit_color_policy": "multi-frame shirt appearance groups; single-color hints remain available",
             "automatic_calibration": bool(pitch_model or pitch_lines_model),

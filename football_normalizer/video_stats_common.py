@@ -96,8 +96,9 @@ def validate_context(context):
                 or not isinstance(event.get("track_id"), str)):
             raise ValueError("Events need unique IDs, valid type/time/period and track_id")
         ids.add(event["id"])
-        if "reviewed" in event and type(event["reviewed"]) is not bool:
-            raise ValueError("Event reviewed must be true or false")
+        for flag in ("reviewed", "track_confirmed"):
+            if flag in event and type(event[flag]) is not bool:
+                raise ValueError(f"Event {flag} must be true or false")
     config = {"high_speed_m_s": 5.5, "sprint_m_s": 7., "accel_m_s2": 2.5, "min_sprint_ms": 1000}
     settings = context.get("config", {})
     if not isinstance(settings, dict) or set(settings)-set(config):
@@ -248,6 +249,9 @@ def prepare(report, context=None):
                 continue
             if obj not in ("player", "ball"):
                 continue
+            if obj == "player" and row.get("on_pitch") is False:
+                excluded["off_pitch"] += 1
+                continue
             if obj == "ball" and ball_count != 1:
                 excluded["ambiguous_ball"] += 1
                 continue
@@ -313,7 +317,8 @@ def prepare(report, context=None):
                        "defensive_lines": (episode or {}).get("defensive_lines", context.get("defensive_lines", {})),
                        "team_lines": (episode or {}).get("team_lines", context.get("team_lines", {}))})
         previous, cohort, previous_selection = f, now, selection
-    verified = context.get("pitch_dimensions_verified") is True or report.get("dimensions_assumed") is False
+    verified = context.get("pitch_dimensions_verified") is True or (
+        report.get("dimensions_assumed") is False and (length, width) == (source_length, source_width))
     mapping_reviewed = context.get("calibration_reviewed") is True or any(f["players"] for f in output) and all(
         p["quality"] == "verified" for f in output for p in f["players"])
     directions = context.get("directions", {}) if context.get("orientation_confirmed") is True else {}

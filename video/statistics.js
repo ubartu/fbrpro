@@ -6,6 +6,8 @@ let videoStatistics, statisticsContext={}, statisticsAppliedContext={};
 let statisticsGeneration=0, statisticsBusy=false;
 let statisticsHalfEdited=false;
 let statisticsImportedNonLive=false;
+let statisticsFrame, statisticsActionFrame, statisticsTrackingSource;
+let automaticEvents, automaticEventPage=0, automaticEventRequest=0;
 const statisticsFlags={
   "statistics-live":"live_play", "statistics-calibration":"calibration_reviewed",
   "statistics-orientation":"orientation_confirmed", "statistics-dimensions":"pitch_dimensions_verified",
@@ -15,6 +17,10 @@ const statisticsLabels={
   positioning:"Positioning",movement:"Observed movement",physical:"Physical estimates",relationships:"Distances and relationships",
   off_ball:"Off-ball evidence",events:"Reviewed match actions",shape:"Observed team shape",coverage:"Coverage",
   average_position_m:"Average position",observed_distance_m:"Distance during observable tracking",forward_m:"Forward displacement",
+  relative_distance_pct:"Distance as share of pitch length",relative_rate_pct_s:"Movement rate",
+  relative_usable_ms:"Movement observation time",relative_unresolved_ms:"Time below movement resolution",
+  relative_forward_pct:"Forward distance as share of pitch length",relative_backward_pct:"Backward distance as share of pitch length",
+  relative_lateral_pct:"Sideways distance as share of pitch width",
   backward_m:"Backward displacement",lateral_m:"Lateral displacement",mean_speed_m_s:"Average speed",max_speed_m_s:"Maximum speed",
   high_speed_distance_m:"High-speed running distance",high_speed_time_ms:"High-speed running time",sprint_bouts:"Sprint bouts",
   sprint_distance_m:"Sprint distance",max_acceleration_m_s2:"Maximum acceleration",max_deceleration_m_s2:"Maximum deceleration",
@@ -44,6 +50,7 @@ function statisticsNumber(value,key=""){
   if(/_m_s2$/.test(key))return fmt(value)+" m/s²";
   if(/_m_s$/.test(key))return fmt(value)+" m/s";
   if(/_m2$/.test(key))return fmt(value)+" m²";
+  if(/_pct_s$/.test(key))return fmt(value)+"% of pitch length/s";
   if(/_pct$/.test(key)||key==="pct")return fmt(value)+"%";
   if(/_m$/.test(key)||key==="x"||key==="y")return fmt(value)+" m";
   return fmt(value);
@@ -53,11 +60,23 @@ function clearVideoStatistics(){
   statisticsContext={};statisticsAppliedContext={};
   statisticsHalfEdited=false;
   statisticsImportedNonLive=false;
+  statisticsFrame=statisticsTrackingSource=undefined;
+  automaticEventRequest++;automaticEvents=undefined;automaticEventPage=0;
+  $("statistics-spotting-file").value="";
+  $("statistics-spotting-half").value="1";
+  $("statistics-spotting-source").value="0";$("statistics-spotting-video").value="0";
+  $("statistics-spotting-alignment").hidden=$("statistics-spotting-hint").hidden=true;
+  $("statistics-spotting-run").disabled=false;
+  status("statistics-spotting-status","");
+  renderAutomaticEvents();
+  $("statistics-all-tracks").checked=false;
+  resetStatisticsActionFrame();
   $("statistics-results").hidden=true;$("statistics-export").disabled=true;
   $("statistics-calculate").disabled=!tracking;
   $("statistics-scope").textContent="No statistics yet";
   for(const id of Object.keys(statisticsFlags))$(id).checked=false;
   $("statistics-start").value="";$("statistics-end").value="";
+  $("statistics-pitch-length").value="";$("statistics-pitch-width").value="";
   $("statistics-half-start").value="";
   status("statistics-status","Track a video or open a tracking report, then calculate statistics.");
   status("statistics-context-status","");
@@ -65,7 +84,8 @@ function clearVideoStatistics(){
 function setupVideoStatistics(){
   clearVideoStatistics();
   $("statistics-calculate").disabled=!tracking?.frames?.length;
-  $("statistics-dimensions-label").textContent="The report uses the actual pitch dimensions ("+fmt(tracking?.coordinate_length_m)+" × "+fmt(tracking?.coordinate_width_m)+" m)";
+  $("statistics-pitch-length").placeholder=fmt(tracking?.coordinate_length_m)+" from tracking report";
+  $("statistics-pitch-width").placeholder=fmt(tracking?.coordinate_width_m)+" from tracking report";
   const teams=new Set(teamColours.keys());
   if(teams.size<2){
     teamsFromSummary:for(const clip of tracking?.role_inference?.clips||[])
@@ -108,6 +128,12 @@ function collectStatisticsContext(){
     }
   }
   if(context.end_ms!==undefined&&context.end_ms<=(context.start_ms||0))throw Error("End time must be after the start time.");
+  for(const [id,key] of [["statistics-pitch-length","pitch_length_m"],["statistics-pitch-width","pitch_width_m"]]){
+    const value=$(id).value.trim();
+    if(!value)delete context[key];
+    else if(!positive(Number(value))||Number(value)>500)throw Error("Enter valid pitch dimensions in metres.");
+    else context[key]=Number(value);
+  }
   if(statisticsHalfEdited){
     const value=$("statistics-half-start").value.trim();
     if(value==="")delete context.period_intervals;
@@ -120,8 +146,10 @@ function collectStatisticsContext(){
       context.period_intervals=[...(start>0?[{start_ms:0,end_ms:start,period:1}]:[]),{start_ms:start,end_ms:end,period:2}];
     }
   }
-  for(const key of ["match_id","video_id","plan_id"])
-    if(context[key]&&tracking?.[key]&&context[key]!==tracking[key])throw Error("The context file belongs to a different "+key.replaceAll("_"," ")+".");
+  for(const key of ["match_id","video_id","plan_id","source_sha256"]){
+    if(context[key]&&tracking?.[key]&&context[key]!==tracking[key])throw Error("The context file belongs to different footage or tracking.");
+    if(!context[key]&&tracking?.[key])context[key]=tracking[key];
+  }
   return context;
 }
 function applyStatisticsContext(context){
@@ -134,6 +162,8 @@ function applyStatisticsContext(context){
   for(const [id,key] of Object.entries(statisticsFlags))$(id).checked=context[key]===true;
   $("statistics-start").value=finite(context.start_ms)?String(context.start_ms/1000):"";
   $("statistics-end").value=finite(context.end_ms)?String(context.end_ms/1000):"";
+  $("statistics-pitch-length").value=finite(context.pitch_length_m)?String(context.pitch_length_m):"";
+  $("statistics-pitch-width").value=finite(context.pitch_width_m)?String(context.pitch_width_m):"";
   const teams=Object.values(context.directions||{}).flatMap(x=>x&&typeof x==="object"?Object.keys(x):[]);
   const select=$("statistics-direction-team"),known=new Set([...select.children].map(x=>x.value));
   for(const team of teams)if(!known.has(team)){option(select,team,statisticsTeamName(team));known.add(team);}
@@ -144,6 +174,9 @@ function parseVideoStatistics(data){
   if(data?.version!=="fbrpro-video-stats-v1"||!Array.isArray(data.players)||!Array.isArray(data.teams)||
     data.players.some(p=>!p||typeof p.id!=="string")||data.teams.some(t=>!t||typeof t.team!=="string"))
     throw Error("Choose an FBRPRO video statistics report.");
+  const snapshot=data.lineup_snapshot;
+  if(snapshot!=null&&(!validMs(snapshot.t_ms)||!Array.isArray(snapshot.track_ids)||snapshot.track_ids.some(id=>typeof id!=="string")))
+    throw Error("The statistics report contains an invalid player snapshot.");
   return data;
 }
 function statisticsRow(table,label,value,key,reason){
@@ -169,9 +202,9 @@ function statisticsMetricRows(table,data,prefix="",depth=0,parentKey=""){
       if("value" in value||"count" in value){
         const metricValue="value" in value?value.value:value.count;
         const unitKey=key.endsWith("_ms")||key.endsWith("_pct")?key:"";
-        statisticsRow(table,label,metricValue,unitKey,value.reason||statisticsStatusNames[value.status]);
-        if(metricValue==null&&finite(value.confirmed_count)&&value.confirmed_count>0)
-          statisticsRow(table,"Reviewed observations so far",value.confirmed_count,"","Partial evidence; not a complete event total");
+        const partial=metricValue==null&&finite(value.confirmed_count)&&value.confirmed_count>0;
+        statisticsRow(table,label,partial?value.confirmed_count:metricValue,unitKey,
+          partial?"Reviewed observations so far. "+(value.reason||"Event coverage is incomplete."):value.reason||statisticsStatusNames[value.status]);
         if(finite(value.coverage_pct))statisticsRow(table,"Coverage for "+statisticsLabel(key),value.coverage_pct,"coverage_pct");
         if(finite(value.observed_ms))statisticsRow(table,"Observed time for "+statisticsLabel(key),value.observed_ms,"observed_ms");
         if(finite(value.value_ms))statisticsRow(table,statisticsLabel(key)+" time",value.value_ms,"value_ms");
@@ -218,15 +251,165 @@ function statisticsMap(target,map,columns,rows,average){
 function renderStatisticsPlayer(){
   const p=videoStatistics?.players.find(x=>x.id===$("statistics-player").value);
   $("statistics-player-coverage").replaceChildren();$("statistics-player-metrics").replaceChildren();
-  if(!p){statisticsMap($("statistics-heatmap"),null,6,4);statisticsMap($("statistics-zones"),null,3,3);return;}
+  $("statistics-team-review").hidden=!p||!matchingStatisticsTracking();
+  if(!p){$("statistics-player-identity").textContent="No matching players at this moment.";$("statistics-zone-note").textContent="Percent of usable observed time";statisticsMap($("statistics-heatmap"),null,6,4);statisticsMap($("statistics-zones"),null,3,3);return;}
+  $("statistics-review-team").value=Object.hasOwn(statisticsContext.identities||{},p.id)?statisticsContext.identities[p.id].team_id||p.team||"":p.team||"";
   $("statistics-player-identity").textContent=(p.player_id?"Confirmed player: "+p.player_id:"Anonymous tracking identity; replay number is not a shirt number")+
     " · "+statisticsTeamName(p.team);
   statisticsSection($("statistics-player-coverage"),"Observed coverage",p.coverage);
   statisticsMap($("statistics-heatmap"),p.positioning?.heatmap,6,4,p.positioning?.average_position_m);
   statisticsMap($("statistics-zones"),p.positioning?.zones,3,3);
   $("statistics-zone-note").textContent="Percent of usable observed time · uncertain boundary time: "+statisticsNumber(p.positioning?.zones?.uncertain_ms,"uncertain_ms")+". Zone percentages can total less than 100%.";
-  for(const key of ["positioning","movement","physical","relationships","off_ball","events"])
-    statisticsSection($("statistics-player-metrics"),statisticsLabel(key),p[key],["positioning","movement"].includes(key));
+  for(const key of ["positioning","movement","physical","relationships","off_ball"]){
+    const data=key==="movement"&&p.movement?Object.fromEntries(Object.entries(p.movement).filter(([field,value])=>
+      value!=null&&(!Array.isArray(value)||value.length)&&(field!=="run_directions_ms"||p.movement.directional_time_ms>0))):p[key];
+    statisticsSection($("statistics-player-metrics"),statisticsLabel(key),data,["positioning","movement"].includes(key));
+  }
+  const reviewed=Object.fromEntries(Object.entries(p.events||{}).filter(([,metric])=>finite(metric?.value)||metric?.confirmed_count>0));
+  const auto=automaticEvents?.player_pass_attempts?.[p.id];
+  if(auto&&matchingStatisticsTracking()&&JSON.stringify(automaticEvents.scope_spans)===JSON.stringify(videoStatistics.scope_spans))
+    statisticsSection($("statistics-player-metrics"),"Automatic pass estimates",{pass_attempts:auto},false);
+  if(Object.keys(reviewed).length)statisticsSection($("statistics-player-metrics"),"Reviewed match actions",reviewed,false);
+  else $("statistics-player-metrics").append(node("p","hint","Review footage and save actions in Actions to review to build this player’s event record."));
+}
+
+function matchingStatisticsTracking(){
+  return Boolean(tracking&&videoStatistics&&(statisticsTrackingSource===tracking||["video_id","source_sha256"].some(key=>tracking[key]&&tracking[key]===videoStatistics[key]))&&
+    !getMismatch(videoStatistics,tracking)&&(!tracking.source_sha256||!videoStatistics.source_sha256||tracking.source_sha256===videoStatistics.source_sha256));
+}
+function statisticsFrameAtPlayhead(){
+  if(!matchingStatisticsTracking())return;
+  const ms=Number.isFinite(video.duration)?video.currentTime*1000:replayMs;
+  const frame=nearestFrame(tracking.frames,ms);
+  if(frame&&Math.abs(frame.video_time_ms-ms)<=tracking.tolerance)return frame;
+}
+function visibleStatisticsPlayers(frame){
+  return frame.objects.filter(o=>o.object_type==="player"&&o.observed===true&&!o.estimated&&o.visibility!=="missing"&&o.on_pitch!==false&&!probableReferee(o));
+}
+function statisticsPlayerName(p){
+  const id=p.track_id||p.id;
+  const roster=clipPlan?.identity_roster||clipPlan?.players||[];
+  const name=matchingStatisticsTracking()&&!getMismatch(tracking,clipPlan)&&p.player_id?roster.find(row=>row.id===p.player_id)?.name:null;
+  return p.name||name||p.player_id||(matchingStatisticsTracking()&&playerNumbers.has(id)?"Track #"+playerNumbers.get(id):id);
+}
+function renderAutomaticEvents(){
+  const current=matchingStatisticsTracking()?automaticEvents:undefined;
+  const target=$("statistics-spotting-events"),rows=current?.events||[],pageSize=30;
+  target.replaceChildren();
+  $("statistics-spotting-export").disabled=!current;
+  $("statistics-spotting-pages").hidden=rows.length<=pageSize;
+  $("statistics-spotting-prev").disabled=automaticEventPage===0;
+  $("statistics-spotting-next").disabled=(automaticEventPage+1)*pageSize>=rows.length;
+  $("statistics-spotting-page").textContent="Page "+(automaticEventPage+1)+" of "+Math.max(1,Math.ceil(rows.length/pageSize));
+  const names=new Map((videoStatistics?.players||[]).map(p=>[p.id,statisticsPlayerName(p)]));
+  for(const event of rows.slice(automaticEventPage*pageSize,(automaticEventPage+1)*pageSize)){
+    const item=node("article","statistics-candidate");
+    const actor=event.track_id&&(names.get(event.track_id)||statisticsPlayerName({track_id:event.track_id}));
+    const receiver=event.recipient_candidate_track_id;
+    const receiverName=receiver&&(names.get(receiver)||statisticsPlayerName({track_id:receiver}));
+    item.append(node("p",null,clock(event.t_ms)+" · "+event.label+" · "+(actor||"Player unknown")+(receiverName?" → "+receiverName:"")));
+    item.append(node("small","hint",(event.source==="soccernet"?"SoccerNet score "+fmt(event.action_score*100)+"%":"Tracking candidate")+" · "+event.actor_reason));
+    const button=node("button","secondary","Review in footage");button.type="button";
+    button.onclick=()=>{video.pause?.();seek(event.t_ms);};item.append(button);
+    target.append(item);
+  }
+}
+
+$("statistics-spotting-file").onchange=()=>{
+  const hidden=!$("statistics-spotting-file").files.length;
+  $("statistics-spotting-alignment").hidden=$("statistics-spotting-hint").hidden=hidden;
+};
+$("statistics-spotting-prev").onclick=()=>{automaticEventPage--;renderAutomaticEvents();};
+$("statistics-spotting-next").onclick=()=>{automaticEventPage++;renderAutomaticEvents();};
+$("statistics-spotting-export").onclick=()=>{if(automaticEvents)download("video-events.json",automaticEvents);};
+$("statistics-spotting-run").onclick=async()=>{
+  if(!matchingStatisticsTracking())return status("statistics-spotting-status","Calculate statistics from the active tracking report first.",true);
+  const source=tracking,request=++automaticEventRequest;
+  $("statistics-spotting-run").disabled=true;
+  try{
+    status("statistics-spotting-status","Analyzing ball and player tracks…");
+    const context=collectStatisticsContext(),file=$("statistics-spotting-file").files[0];
+    const payload={tracking:source,context};
+    if(file){
+      if(file.size>20*1024*1024)throw Error("Choose one SoccerNet predictions file under 20 MB.");
+      const sourceTime=$("statistics-spotting-source").value.trim(),videoTime=$("statistics-spotting-video").value.trim();
+      if(!sourceTime||!videoTime||![sourceTime,videoTime].every(value=>finite(Number(value))&&Number(value)>=0))throw Error("Enter the same moment in both videos.");
+      payload.predictions=JSON.parse(await file.text());
+      if(!payload.predictions||!Array.isArray(payload.predictions.predictions))throw Error("Choose a SoccerNet results_spotting.json predictions file.");
+      payload.alignment={half:Number($("statistics-spotting-half").value),source_ms:Math.round(Number(sourceTime)*1000),video_ms:Math.round(Number(videoTime)*1000)};
+    }
+    if(request!==automaticEventRequest||tracking!==source||!matchingStatisticsTracking())return;
+    const result=await api("/api/video-events",{method:"POST",headers:{...trackHeaders,"Content-Type":"application/json"},body:JSON.stringify(payload)}).then(r=>r.json());
+    if(request!==automaticEventRequest||tracking!==source||!matchingStatisticsTracking())return;
+    automaticEvents=result;automaticEventPage=0;renderAutomaticEvents();renderStatisticsPlayer();
+    const attempts=result.events.filter(e=>e.type==="pass"&&e.status==="predicted");
+    const candidates=result.events.filter(e=>e.status==="candidate").length;
+    const summary=file?result.predictions_in_scope+" imported actions · "+attempts.filter(e=>e.track_id).length+" of "+attempts.length+" predicted passes attributed · ":"";
+    status("statistics-spotting-status",summary+candidates+" tracking candidates"+(file&&result.predictions_outside_scope?" · "+result.predictions_outside_scope+" outside usable scope":"")+".");
+  }catch(error){if(request===automaticEventRequest)status("statistics-spotting-status",error.message,true);}
+  finally{if(request===automaticEventRequest)$("statistics-spotting-run").disabled=false;}
+};
+function statisticsSnapshot(){
+  if(statisticsFrame||videoStatistics.lineup_snapshot)return statisticsFrame||videoStatistics.lineup_snapshot;
+  if(!matchingStatisticsTracking())return;
+  const frame=statisticsFrameAtPlayhead()||tracking.frames[0];
+  if(frame)return {t_ms:frame.video_time_ms,track_ids:visibleStatisticsPlayers(frame).map(o=>o.track_id)};
+}
+function renderStatisticsPicker(){
+  const snapshot=statisticsSnapshot();
+  const all=$("statistics-all-tracks").checked||!snapshot;
+  const ids=new Set(snapshot?.track_ids||[]);
+  const visible=videoStatistics.players.filter(p=>all||ids.has(p.id));
+  const filter=$("statistics-player-team"),priorTeam=filter.children.length?filter.value:"all";
+  const teams=[...new Set(visible.map(p=>p.team||""))].sort();
+  filter.replaceChildren();option(filter,"all",all||!teams.some(Boolean)?"All teams":"Assigned teams");
+  for(const team of teams)option(filter,team,statisticsTeamName(team));
+  filter.value=teams.includes(priorTeam)?priorTeam:"all";
+  const chosen=visible.filter(p=>filter.value==="all"?all||!teams.some(Boolean)||p.team:(p.team||"")===filter.value);
+  chosen.sort((a,b)=>statisticsTeamName(a.team).localeCompare(statisticsTeamName(b.team))||((b.coverage?.usable_ms||0)-(a.coverage?.usable_ms||0)));
+  const select=$("statistics-player"),prior=select.value;
+  select.replaceChildren();
+  for(const p of chosen)option(select,p.id,statisticsPlayerName(p)+" · "+statisticsTeamName(p.team));
+  select.value=chosen.some(p=>p.id===prior)?prior:chosen[0]?.id||"";
+  $("statistics-show-frame").disabled=!snapshot||!matchingStatisticsTracking();
+  $("statistics-use-frame").disabled=!matchingStatisticsTracking();
+  const unassigned=visible.filter(p=>!p.team).length;
+  status("statistics-lineup-status",all?chosen.length+" saved track fragments":chosen.length+" visible at "+clock(snapshot.t_ms)+
+    (unassigned&&teams.some(Boolean)&&filter.value==="all"?" · "+unassigned+" need a team assignment":""));
+  renderStatisticsPlayer();
+}
+function renderRecordedActions(){
+  const target=$("statistics-reviewed-actions");target.replaceChildren();
+  const events=(Array.isArray(statisticsContext.events)?statisticsContext.events:[]).filter(e=>e?.reviewed===true);
+  for(const event of events.slice(-100).reverse()){
+    const item=node("article","statistics-candidate");
+    const player=videoStatistics?.players.find(p=>p.id===event.track_id);
+    item.append(node("p",null,[statisticsLabel(event.type||"action"),statisticsPlayerName(player||{track_id:event.track_id}),
+      clock(event.t_ms),event.outcome?statisticsLabel(event.outcome):null].filter(Boolean).join(" · ")));
+    if(matchingStatisticsTracking()&&finite(event.t_ms)){
+      const review=node("button","secondary","Show in footage");review.type="button";review.onclick=()=>seek(event.t_ms);item.append(review);
+    }
+    const remove=node("button","secondary","Remove");remove.type="button";
+    remove.onclick=()=>{
+      if(statisticsBusy)return;
+      statisticsContext.events=statisticsContext.events.filter(e=>e.id!==event.id);
+      renderRecordedActions();status("statistics-action-status","Action removed. Calculate statistics to update the counts.");
+    };
+    item.append(remove);target.append(item);
+  }
+  if(events.length>100)target.append(node("p","hint","Showing the latest 100 saved actions. Export context for the full list."));
+}
+const statisticsActionOutcomes={pass:["complete","incomplete"],reception:[],touch:[],tackle:["won","lost"],interception:[],shot:[],press:["successful","unsuccessful"]};
+function showStatisticsActionOutcomes(){
+  const select=$("statistics-action-outcome"),outcomes=statisticsActionOutcomes[$("statistics-action-type").value]||[];
+  select.replaceChildren();option(select,"","Unspecified");select.value="";
+  for(const value of outcomes)option(select,value,statisticsLabel(value));
+  select.disabled=!outcomes.length;
+}
+function resetStatisticsActionFrame(){
+  statisticsActionFrame=undefined;
+  $("statistics-action-player").replaceChildren();$("statistics-save-action").disabled=true;
+  status("statistics-action-status","");
 }
 function renderStatisticsTeam(){
   $("statistics-team-metrics").replaceChildren();
@@ -255,22 +438,26 @@ function appendStatisticsEvidence(target,items){
 function renderVideoStatistics(){
   const data=videoStatistics;$("statistics-results").hidden=!data;$("statistics-export").disabled=!data;if(!data)return;
   const sourceDifference=getMismatch(data,tracking);
-  $("statistics-scope").textContent=nf.format(data.players.length)+" tracked players";
+  $("statistics-scope").textContent=nf.format(data.players.length)+" track fragments";
   const notes=Array.isArray(data.notes)?data.notes.filter(x=>typeof x==="string"):[];
   $("statistics-notes").textContent=[sourceDifference?"This report belongs to different "+sourceDifference+"; footage evidence links are disabled.":"",
     "Stats describe observable tracking in the selected scope, not unseen full-match movement. Automatic calibration and anonymous identities remain estimates."].filter(Boolean).join(" ");
   $("statistics-method-notes").replaceChildren();for(const note of notes)$("statistics-method-notes").append(node("li",null,note));
-  const player=$("statistics-player"),prior=player.value;player.replaceChildren();
-  const ordered=[...data.players].sort((a,b)=>(b.coverage?.usable_ms||0)-(a.coverage?.usable_ms||0));
-  ordered.forEach((p,i)=>option(player,p.id,(p.name||p.player_id||"Track #"+(playerNumbers.get(p.track_id||p.id)||i+1))+" · "+statisticsTeamName(p.team)));
-  player.value=data.players.some(p=>p.id===prior)?prior:ordered[0]?.id||"";
+  const reviewTeam=$("statistics-review-team");reviewTeam.replaceChildren();
+  const known=new Set([...$("statistics-direction-team").children].map(o=>o.value).filter(Boolean));
+  for(const p of data.players)if(p.team)known.add(p.team);
+  if(!known.size||[...known].every(t=>t.startsWith("kit:"))){known.add("kit:team_a");known.add("kit:team_b");}
+  option(reviewTeam,"","Choose a team");
+  for(const value of known)option(reviewTeam,value,statisticsTeamName(value));
   const team=$("statistics-team"),oldTeam=team.value;team.replaceChildren();for(const t of data.teams)option(team,t.team,statisticsTeamName(t.team));
   team.value=data.teams.some(t=>t.team===oldTeam)?oldTeam:data.teams[0]?.team||"";
-  renderStatisticsPlayer();renderStatisticsTeam();
+  renderStatisticsPicker();renderStatisticsTeam();renderRecordedActions();
+  renderAutomaticEvents();
+  $("statistics-action-frame").disabled=!matchingStatisticsTracking();
   $("statistics-candidates").replaceChildren();
   const candidates=Array.isArray(data.event_candidates)?data.event_candidates:[];
   if(candidates.length)appendStatisticsEvidence($("statistics-candidates"),candidates);
-  else $("statistics-candidates").append(node("p","hint","No reviewable action candidates in this report. Missing ball evidence is not evidence that no actions occurred."));
+  else $("statistics-candidates").append(node("p","hint","Ball-transfer suggestions need reviewed live play and usable ground-ball positions. You can still tag actions directly from the footage."));
 }
 $("statistics-calculate").onclick=async()=>{
   if(!tracking||statisticsBusy)return;
@@ -281,7 +468,7 @@ $("statistics-calculate").onclick=async()=>{
     const result=await api("/api/statistics",{method:"POST",headers:{...trackHeaders,"Content-Type":"application/json"},
       body:JSON.stringify({tracking:source,context})}).then(r=>r.json());
     if(request!==statisticsGeneration||tracking!==source)return;
-    videoStatistics=parseVideoStatistics(result);statisticsAppliedContext=context;statisticsContext=context;
+    videoStatistics=parseVideoStatistics(result);statisticsTrackingSource=source;statisticsAppliedContext=context;statisticsContext=context;
     renderVideoStatistics();status("statistics-status","Statistics ready. Unavailable measurements explain the evidence they still need.");
   }catch(error){if(request===statisticsGeneration)status("statistics-status",error.message,true);}
   finally{if(request===statisticsGeneration){statisticsBusy=false;$("statistics-calculate").disabled=!tracking?.frames?.length;}}
@@ -296,6 +483,62 @@ $("statistics-direction").onchange=()=>{
   else delete statisticsContext.directions[period][team];
 };
 $("statistics-player").onchange=renderStatisticsPlayer;$("statistics-team").onchange=renderStatisticsTeam;
+$("statistics-all-tracks").onchange=renderStatisticsPicker;
+$("statistics-player-team").onchange=renderStatisticsPicker;
+$("statistics-use-frame").onclick=()=>{
+  const frame=statisticsFrameAtPlayhead();
+  if(!frame)return status("statistics-lineup-status","Move to a tracked moment in this clip.",true);
+  statisticsFrame={t_ms:frame.video_time_ms,track_ids:visibleStatisticsPlayers(frame).map(o=>o.track_id)};
+  $("statistics-all-tracks").checked=false;renderStatisticsPicker();
+};
+$("statistics-show-frame").onclick=()=>{
+  const snapshot=statisticsSnapshot();if(snapshot&&matchingStatisticsTracking())seek(snapshot.t_ms);
+};
+$("statistics-assign-team").onclick=()=>{
+  if(statisticsBusy||!matchingStatisticsTracking())return;
+  const id=$("statistics-player").value,team=$("statistics-review-team").value;
+  if(!id||!team)return status("statistics-lineup-status","Choose the player's team from the footage.",true);
+  const identities=statisticsContext.identities||{};
+  statisticsContext.identities={...identities,[id]:{...(Object.hasOwn(identities,id)?identities[id]:{}),team_id:team}};
+  status("statistics-lineup-status","Team assignment saved. Calculate statistics to update the report.");
+};
+$("statistics-action-type").onchange=showStatisticsActionOutcomes;
+showStatisticsActionOutcomes();
+video.addEventListener("emptied",resetStatisticsActionFrame);
+$("statistics-action-frame").onclick=()=>{
+  resetStatisticsActionFrame();
+  if(!Number.isFinite(video.duration))return status("statistics-action-status","Open the matching video to review an action.",true);
+  const frame=statisticsFrameAtPlayhead();
+  if(!frame)return status("statistics-action-status","Pause on a tracked moment in the matching video.",true);
+  if(Array.isArray(videoStatistics.scope_spans)&&!videoStatistics.scope_spans.some(span=>span.start_ms<=frame.video_time_ms&&frame.video_time_ms<span.end_ms))
+    return status("statistics-action-status","This moment is outside the calculated statistics scope.",true);
+  const players=visibleStatisticsPlayers(frame);
+  if(!players.length)return status("statistics-action-status","No observed players at this moment.",true);
+  video.pause?.();statisticsActionFrame=frame;
+  const select=$("statistics-action-player"),prior=$("statistics-player").value;
+  for(const o of players){
+    const p=videoStatistics.players.find(p=>p.id===o.track_id);
+    option(select,o.track_id,statisticsPlayerName(p||o)+" · "+statisticsTeamName(p?.team||o.team_id||o.inferred_team));
+  }
+  select.value=players.some(o=>o.track_id===prior)?prior:players[0].track_id;
+  $("statistics-save-action").disabled=false;
+  status("statistics-action-status","Reviewing the tracking sample at "+clock(frame.video_time_ms)+".");
+};
+$("statistics-save-action").onclick=()=>{
+  if(statisticsBusy||!matchingStatisticsTracking()||!statisticsActionFrame)return;
+  const track_id=$("statistics-action-player").value,type=$("statistics-action-type").value,outcome=$("statistics-action-outcome").value;
+  if(!Object.hasOwn(statisticsActionOutcomes,type)||!visibleStatisticsPlayers(statisticsActionFrame).some(o=>o.track_id===track_id))return;
+  try{
+    const context=collectStatisticsContext(),t_ms=statisticsActionFrame.video_time_ms;
+    const span=context.period_intervals?.find(s=>s.start_ms<=t_ms&&t_ms<s.end_ms);
+    const period=span?.period||statisticsActionFrame.period||1;
+    const id=`video-review:${type}:${track_id}:${t_ms}`;
+    const event={id,type,t_ms,period,track_id,reviewed:true,track_confirmed:true};
+    if(statisticsActionOutcomes[type].includes(outcome))event.outcome=outcome;
+    statisticsContext.events=[...(context.events||[]).filter(e=>e.id!==id),event];
+    renderRecordedActions();status("statistics-action-status","Action saved at "+clock(t_ms)+". Calculate statistics to update the counts.");
+  }catch(error){status("statistics-action-status",error.message,true);}
+};
 for(const view of ["player","team","candidates"])$("statistics-tab-"+view).onclick=()=>{
   for(const key of ["player","team","candidates"]){
     $("statistics-tab-"+key).setAttribute("aria-pressed",String(key===view));
@@ -306,17 +549,23 @@ $("statistics-file").addEventListener("change",async e=>{
   const file=e.target.files[0];if(!file)return;const request=++statisticsGeneration;statisticsBusy=false;
   try{
     const data=parseVideoStatistics(JSON.parse(await file.text()));if(request!==statisticsGeneration)return;
-    videoStatistics=data;statisticsAppliedContext=data.context||{};renderVideoStatistics();
+    videoStatistics=data;statisticsFrame=statisticsTrackingSource=undefined;resetStatisticsActionFrame();
+    statisticsAppliedContext=data.context||{};renderVideoStatistics();
     $("statistics-calculate").disabled=!tracking?.frames?.length;status("statistics-status","Statistics report opened. Calculations have not changed the active tracking report.");
   }catch(error){if(request===statisticsGeneration)status("statistics-status",error.message,true);}
 });
 $("statistics-context-file").addEventListener("change",async e=>{
   const file=e.target.files[0];if(!file)return;
-  try{applyStatisticsContext(JSON.parse(await file.text()));status("statistics-context-status",file.name+" loaded. Check the scope, then calculate statistics.");}
+  try{applyStatisticsContext(JSON.parse(await file.text()));renderRecordedActions();status("statistics-context-status",file.name+" loaded. Check the scope, then calculate statistics.");}
   catch(error){status("statistics-context-status",error.message,true);}
 });
 $("statistics-export").onclick=()=>{if(videoStatistics)download("video-statistics.json",videoStatistics);};
-$("statistics-context-export").onclick=()=>{try{download("video-statistics-context.json",collectStatisticsContext());}catch(error){status("statistics-context-status",error.message,true);}};
+function exportStatisticsContext(statusId){
+  try{download("video-statistics-context.json",collectStatisticsContext());}
+  catch(error){status(statusId,error.message,true);}
+}
+$("statistics-context-export").onclick=()=>exportStatisticsContext("statistics-context-status");
+$("statistics-review-export").onclick=()=>exportStatisticsContext("statistics-action-status");
 $("statistics-context-template").onclick=()=>download("video-statistics-context-template.json",{
   match_id:tracking?.match_id,video_id:tracking?.video_id,plan_id:tracking?.plan_id,
   calibration_reviewed:false,orientation_confirmed:false,pitch_dimensions_verified:false,ground_ball_reviewed:false,

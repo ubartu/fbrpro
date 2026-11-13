@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from uuid import UUID, uuid4
 
 from . import video, video_tracking
+from .video_events import analyze as analyze_events
 from .video_inference import BACKENDS
 from .video_geometry import reviewed_report
 from .video_statistics import analyze as analyze_statistics
@@ -299,13 +300,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if not self.same_origin():
             return
         target = urlsplit(self.path)
-        if target.path not in {"/api/track", "/api/cancel", "/api/geometry", "/api/statistics"}:
+        if target.path not in {"/api/track", "/api/cancel", "/api/geometry", "/api/statistics", "/api/video-events"}:
             self.error(HTTPStatus.NOT_FOUND, "This workbench route does not exist.")
             return
         if self.headers.get("X-FBRPRO-Video") != "1":
             self.error(HTTPStatus.FORBIDDEN, "Submit the file from the local video workbench.")
             return
-        if target.path == "/api/statistics":
+        if target.path in {"/api/statistics", "/api/video-events"}:
             try:
                 if len(self.headers.get_all("Content-Length") or []) != 1 or self.headers.get("Transfer-Encoding"):
                     raise ValueError("Send statistics with one known content length")
@@ -318,7 +319,11 @@ class ReviewHandler(BaseHTTPRequestHandler):
                 payload = json.loads(self.rfile.read(size))
                 if not isinstance(payload, dict):
                     raise ValueError("Choose a tracking report and statistics context")
-                result = analyze_statistics(payload.get("tracking"), payload.get("context", {}))
+                source, context = payload.get("tracking"), payload.get("context", {})
+                if target.path == "/api/video-events":
+                    result = analyze_events(source, context, payload.get("predictions"), payload.get("alignment"))
+                else:
+                    result = analyze_statistics(source, context)
                 self.send_json(HTTPStatus.OK, result)
             except (ValueError, KeyError, TypeError, AttributeError, OverflowError) as exc:
                 self.error(HTTPStatus.BAD_REQUEST, str(exc))

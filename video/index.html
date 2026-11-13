@@ -130,11 +130,16 @@
         <label>Second half starts at video seconds<input id="statistics-half-start" type="number" min="0" step=".001" placeholder="Optional · 0 for second-half-only footage"></label>
       </div>
       <p class="hint">For a full-match recording, set the actual start of the second half. Choosing a direction for a half alone does not assign video frames to that half. Advanced context can provide period intervals, including extra time.</p>
+      <div class="grid">
+        <label>Pitch length (m)<input id="statistics-pitch-length" type="number" min="1" max="500" step="any" placeholder="From tracking report"></label>
+        <label>Pitch width (m)<input id="statistics-pitch-width" type="number" min="1" max="500" step="any" placeholder="From tracking report"></label>
+      </div>
+      <p class="hint">Use the stadium’s published or measured playing dimensions for distances in metres and speed.</p>
       <div class="statistics-checks">
         <label class="overlay-control"><input id="statistics-live" type="checkbox"> This scope shows live play, without replays or close-ups</label>
         <label class="overlay-control"><input id="statistics-calibration" type="checkbox"> I checked pitch alignment throughout this scope</label>
         <label class="overlay-control"><input id="statistics-orientation" type="checkbox"> The pitch orientation is consistent throughout this scope</label>
-        <label class="overlay-control"><input id="statistics-dimensions" type="checkbox"> <span id="statistics-dimensions-label">The report uses the actual pitch dimensions</span></label>
+        <label class="overlay-control"><input id="statistics-dimensions" type="checkbox"> I verified the actual pitch dimensions</label>
         <label class="overlay-control"><input id="statistics-ground-ball" type="checkbox"> The projected ball positions in this scope are on the ground</label>
       </div>
       <div class="grid">
@@ -156,8 +161,22 @@
       <details class="align"><summary>Measurement notes and limitations</summary><ul id="statistics-method-notes"></ul></details>
       <div class="statistics-tabs" role="group" aria-label="Statistics view"><button id="statistics-tab-player" type="button" class="secondary" aria-pressed="true">Players</button><button id="statistics-tab-team" type="button" class="secondary" aria-pressed="false">Team shape</button><button id="statistics-tab-candidates" type="button" class="secondary" aria-pressed="false">Actions to review</button></div>
       <div id="statistics-player-view">
-        <div class="metric-picker"><label>Tracked player<select id="statistics-player"></select></label></div>
+        <div class="row">
+          <button id="statistics-use-frame" class="secondary" type="button">Use current frame</button>
+          <button id="statistics-show-frame" class="secondary" type="button">Show selected frame</button>
+          <label class="overlay-control"><input id="statistics-all-tracks" type="checkbox"> All track fragments</label>
+        </div>
+        <p id="statistics-lineup-status" class="status" role="status"></p>
+        <div class="metric-picker">
+          <label>Team<select id="statistics-player-team"></select></label>
+          <label>Visible player<select id="statistics-player"></select></label>
+        </div>
         <p id="statistics-player-identity" class="status"></p>
+        <details id="statistics-team-review" class="align">
+          <summary>Correct this player’s team</summary>
+          <div class="metric-picker"><label>Team seen in footage<select id="statistics-review-team"></select></label></div>
+          <button id="statistics-assign-team" class="secondary" type="button">Save team assignment</button>
+        </details>
         <div id="statistics-player-coverage" class="metric-grid"></div>
         <div class="statistics-maps">
           <article class="statistics-map"><h3>Position heatmap</h3><p class="hint">Fixed pitch coordinates · left goal on the left</p><div id="statistics-heatmap" class="statistics-pitch" aria-label="Player position heatmap"></div></article>
@@ -166,7 +185,34 @@
         <div id="statistics-player-metrics" class="statistics-sections"></div>
       </div>
       <div id="statistics-team-view" hidden><div class="metric-picker"><label>Observed team<select id="statistics-team"></select></label></div><p class="hint">These describe visible tracked teammates. They are not a complete formation when players are off camera.</p><div id="statistics-team-metrics" class="statistics-sections"></div></div>
-      <div id="statistics-candidate-view" hidden><p class="hint">These are moments to inspect, not confirmed passes, touches or possession. Review the footage before recording an action.</p><div id="statistics-candidates"></div></div>
+      <div id="statistics-candidate-view" hidden>
+        <details class="align" open>
+          <summary>Automatic pass analysis</summary>
+          <p class="hint">Find possible releases from tracked players and the ball. Add a SoccerNet predictions file to spot actions and estimate pass attempts by player.</p>
+          <label>SoccerNet predictions JSON<input id="statistics-spotting-file" type="file" accept="application/json,.json"></label>
+          <div id="statistics-spotting-alignment" class="grid" hidden>
+            <label>Half in prediction file<select id="statistics-spotting-half"><option value="1">First half</option><option value="2">Second half</option></select></label>
+            <label>Same moment in SoccerNet video (s)<input id="statistics-spotting-source" type="number" min="0" step=".001" value="0"></label>
+            <label>Same moment in open video (s)<input id="statistics-spotting-video" type="number" min="0" step=".001" value="0"></label>
+          </div>
+          <p id="statistics-spotting-hint" class="hint" hidden>Use the matching broadcast. For a clip trimmed from 30 seconds into the half, enter 30 and 0.</p>
+          <div class="row"><button id="statistics-spotting-run" type="button">Analyze actions</button><button id="statistics-spotting-export" class="secondary" type="button" disabled>Export event timeline</button></div>
+          <p id="statistics-spotting-status" class="status" role="status"></p>
+          <div id="statistics-spotting-events"></div>
+          <div id="statistics-spotting-pages" class="row" hidden><button id="statistics-spotting-prev" class="secondary" type="button">Previous</button><span id="statistics-spotting-page"></span><button id="statistics-spotting-next" class="secondary" type="button">Next</button></div>
+        </details>
+        <p class="hint">Pause on an action in the video. Choose the player you saw perform it, then save the observation.</p>
+        <button id="statistics-action-frame" type="button" class="secondary">Choose players at playhead</button>
+        <div class="grid">
+          <label>Player at selected time<select id="statistics-action-player"></select></label>
+          <label>Action<select id="statistics-action-type"><option value="pass">Pass</option><option value="reception">Reception</option><option value="touch">Touch</option><option value="tackle">Tackle</option><option value="interception">Interception</option><option value="shot">Shot</option><option value="press">Press</option></select></label>
+          <label>Outcome<select id="statistics-action-outcome"></select></label>
+        </div>
+        <div class="row"><button id="statistics-save-action" type="button" disabled>Save reviewed action</button><button id="statistics-review-export" class="secondary" type="button">Export review context</button></div>
+        <p id="statistics-action-status" class="status" role="status"></p>
+        <div id="statistics-reviewed-actions"></div>
+        <details class="align"><summary>Suggested moments to review</summary><div id="statistics-candidates"></div></details>
+      </div>
     </div>
   </section>
   <div class="tools">

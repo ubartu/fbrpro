@@ -79,7 +79,15 @@ class VideoPhysicalStatsTests(unittest.TestCase):
                 result = player(data)
                 self.assertIsNone(result["physical"]["mean_speed_m_s"])
                 self.assertIsNone(result["movement"]["observed_distance_m"])
+                self.assertAlmostEqual(result["movement"]["relative_distance_pct"], 4/105*100, places=3)
+                self.assertEqual(result["movement"]["relative_usable_ms"], 1000)
                 self.assertGreater(result["positioning"]["resolved_time_ms"], 0)
+
+    def test_relative_windows_tolerate_small_projection_jitter(self):
+        points = [(10+i*.4+(.55 if i % 2 else -.55), 10) for i in range(11)]
+        result = player(prepared(points, error=.6))
+        self.assertGreater(result["movement"]["relative_distance_pct"], 2)
+        self.assertIsNone(result["physical"]["mean_speed_m_s"])
 
     def test_time_weighted_zone_occupancy_and_raw_observed_denominator(self):
         data = prepared([(10, 10)]*4, stamps=[0, 100, 200, 500])

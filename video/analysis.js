@@ -171,6 +171,12 @@ function pitchPolygon(frame){
      !points.every(p=>Array.isArray(p)&&p.length===2&&p.every(finite)))return;
   return points;
 }
+function pitchOverlaySegments(frame){
+  const segments=frame.pitch_overlay?.segments_xy;
+  if(!Array.isArray(segments))return [];
+  return segments.filter(line=>Array.isArray(line)&&line.length===2&&
+    line.every(p=>Array.isArray(p)&&p.length===2&&p.every(finite)));
+}
 function pitchBoundaryVerified(frame){
   return frame.pitch_boundary?.source==="verified_calibration";
 }
@@ -182,7 +188,10 @@ function summarizeCandidates(frame,polygon){
   if(validMs(frame.off_pitch_candidates))parts.push(fmt(frame.off_pitch_candidates)+" rejected outside pitch");
   if(validMs(frame.pitch_unavailable_candidates))parts.push(fmt(frame.pitch_unavailable_candidates)+" withheld for missing outline");
   status("candidate-status",parts.join(" · "));
-  const boundary=polygon?(pitchBoundaryVerified(frame)?"Pitch outline · Verified camera calibration":
+  const overlay=pitchOverlaySegments(frame);
+  const boundary="pitch_overlay" in frame?(overlay.length?({verified_calibration:"Pitch outline · Verified camera calibration",
+    stabilized_calibration:"Pitch outline · Stabilized pitch alignment",camera_followed:"Pitch outline · Camera-followed alignment"}[frame.pitch_overlay.source]||""):
+    "Pitch outline unavailable in this frame."):polygon?(pitchBoundaryVerified(frame)?"Pitch outline · Verified camera calibration":
     frame.pitch_boundary?.source==="automatic_pitch_lines"?"Pitch outline · SoccerNet line estimate":
     frame.pitch_boundary?.source==="tracked_pitch_lines"?"Pitch outline · Camera-followed line estimate":
     frame.pitch_boundary?.source==="line_checked_landmarks"?"Pitch outline · Line-checked landmark estimate":
@@ -208,7 +217,13 @@ function showOverlayControl(){
 function drawOverlay(frame,polygon){
   if(footageLayer.hasAttribute("hidden"))return;
   const frag=document.createDocumentFragment(), badges=document.createDocumentFragment();
-  if(polygon){
+  if("pitch_overlay" in frame){
+    for(const [[x1,y1],[x2,y2]] of pitchOverlaySegments(frame)){
+      frag.append(svg("line",{x1,y1,x2,y2,stroke:"#75e2bc","stroke-width":2,
+        "stroke-dasharray":frame.pitch_overlay.source==="verified_calibration"?"none":"6 4",
+        "vector-effect":"non-scaling-stroke"}));
+    }
+  }else if(polygon){
     const verified=pitchBoundaryVerified(frame);
     frag.append(svg("polygon",{points:polygon.map(p=>p.join(",")).join(" "),fill:"#75e2bc",
       "fill-opacity":".08",stroke:"#75e2bc","stroke-width":2,"stroke-dasharray":verified?"none":"6 4",

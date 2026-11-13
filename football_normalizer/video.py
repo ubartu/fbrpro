@@ -199,9 +199,10 @@ def from_bundle(root, selector, alignment, side, limit, *, in_possession_limit=0
         raise ValueError("No normalized events for this match")
     report = plan(events, alignment, team, build_up_limit=limit, in_possession_limit=in_possession_limit)
     players = {p["player_id"]: p["name"] for p in read_rows(root, "players")}
-    lineup = sorted({(a["player_id"], a["team_id"]) for a in read_rows(root, "appearances")
-                     if a["match_id"] == mid and a.get("participated")})
-    roster = [{"id": pid, "name": players.get(pid, pid), "team_id": tid} for pid, tid in lineup]
+    lineup = {(a["player_id"], a["team_id"]): a.get("shirt_number") for a in read_rows(root, "appearances")
+              if a["match_id"] == mid and a.get("participated")}
+    roster = [{"id": pid, "name": players.get(pid, pid), "team_id": tid,
+               **({"shirt_number": number} if number is not None else {})} for (pid, tid), number in sorted(lineup.items())]
     report.update(match_id=mid, source_match_id=match.get("source", {}).get("record_id"),
                   competition_id=match.get("competition_id"), season_id=match.get("season_id"),
                   video_id=alignment["video_id"], team_side=side,

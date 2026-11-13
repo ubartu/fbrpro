@@ -164,6 +164,17 @@ class VideoStatsBehaviorsTests(unittest.TestCase):
         context["event_coverage"][0]["end_ms"] = 1000
         self.assertIsNone(stats(calculate(data, context))["events"]["successful_presses"]["value"])
 
+    def test_confirmed_visible_track_actions_produce_partial_counts(self):
+        data, context = fixture([[player("runner", 30, 30, named=False)] for _ in range(5)])
+        data["observed_by_track"] = {"runner": [{"t_ms": 500, "period": 1, "segment_id": "s"}]}
+        event = {"id": "s1", "type": "shot", "t_ms": 500, "period": 1, "track_id": "runner",
+                 "reviewed": True, "track_confirmed": True}
+        context["events"] = [event, {**event, "id": "s2", "t_ms": 1000}, {**event, "id": "s3", "track_confirmed": False}]
+        shots = stats(calculate(data, context))["events"]["shots"]
+        self.assertEqual(shots["confirmed_count"], 1)
+        self.assertEqual(shots["status"], "partial")
+        self.assertIsNone(shots["value"])
+
     def test_explicit_non_live_intervals_do_not_count_reviewed_actions(self):
         data, context = fixture([[player("runner", 30, 30)] for _ in range(5)])
         context["events"] = [{"id": "a", "type": "shot", "t_ms": 500, "track_id": "runner", "reviewed": True},

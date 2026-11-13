@@ -149,6 +149,30 @@ class VideoRoleTests(unittest.TestCase):
                 self.assertIsNone(row["x_m"])
 
     @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_clear_local_kit_evidence_recovers_white_team_on_mixed_and_short_tracks(self):
+        import numpy as np
+
+        frames = team_frames()
+        green, white = (np.tile(values, 3) for values in ([120, 85, 172], [125, 125, 125]))
+        for i, frame in enumerate(frames):
+            for row in frame["objects"]:
+                row["_shirt_appearance"] = green if row["track_id"].startswith("a-") else white
+            frame["objects"].append(person("mixed", None, _shirt_appearance=green if i < 7 else white))
+            if i in (7, 8):
+                frame["objects"].append(person("short", None, _shirt_appearance=white))
+            if i in (2, 6):
+                frame["objects"].append(person("isolated", None, _shirt_appearance=white))
+        shot, = annotate(frames, shirt_groups=True)
+        self.assertEqual(shot["team_status"], "inferred")
+        for i, frame in enumerate(frames):
+            tracks = {row["track_id"]: row for row in frame["objects"]}
+            self.assertEqual(tracks["mixed"]["inferred_team"], "kit:team_a" if i < 7 else "kit:team_b")
+            if i in (7, 8):
+                self.assertEqual(tracks["short"]["inferred_team"], "kit:team_b")
+            if i in (2, 6):
+                self.assertIsNone(tracks["isolated"]["inferred_team"])
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
     def test_known_kits_are_used_in_closeups_before_and_after_the_wide_shot(self):
         import numpy as np
 

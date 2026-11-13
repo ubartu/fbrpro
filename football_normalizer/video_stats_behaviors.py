@@ -354,14 +354,17 @@ def _evidence(name, pid, first, last):
 
 
 def _event_rows(context, data, pid):
-    # Confirmed named identity is required even when the reviewer supplies a
-    # temporary track ID. Anonymous tracks remain available for geometry only.
     meta = data["tracks"][pid]
-    if not meta.get("player_id"):
-        return []
+    observations = data.get("observed_by_track", {}).get(pid, [])
     rows, seen = [], set()
     for event in context.get("events", []):
         if event.get("reviewed") is not True or event.get("type") not in EVENT_TYPES+("reception",):
+            continue
+        if event.get("track_confirmed") is True:
+            if event.get("track_id") != pid or not any(row["t_ms"] == event["t_ms"] and row["period"] == event.get("period", 1)
+                                                      for row in observations):
+                continue
+        elif not meta.get("player_id"):
             continue
         identity = event.get("id")
         if identity and identity in seen:
@@ -407,9 +410,10 @@ def _events(data, context, pid, scopes):
         known_outcomes = {"complete", "incomplete", "successful", "unsuccessful"} if type_ == "pass" else {"successful", "unsuccessful", "won", "lost"}
         missing_outcome = outcomes is not None and any(r.get("outcome") not in known_outcomes for r in selected)
         available = bool(meta.get("player_id")) and complete and not missing_outcome
-        results[name] = {"value": count if available else None, "confirmed_count": count if meta.get("player_id") else None,
-                         "coverage_ms": covered, "status": "reviewed" if available else "unavailable",
-                         "reason": None if available else "Confirm player identity, complete event review for the selected scope and applicable outcomes"}
+        results[name] = {"value": count if available else None,
+                         "confirmed_count": count if meta.get("player_id") or count else None,
+                         "coverage_ms": covered, "status": "reviewed" if available else "partial" if count else "unavailable",
+                         "reason": None if available else "Record actions from the footage. Complete totals require a confirmed player and full event review."}
     attempted, completed = results["pass_attempts"]["value"], results["passes_completed"]["value"]
     results["pass_completion_pct"] = {"value": round(100*completed/attempted, 2) if attempted and completed is not None else None,
                                       "status": "reviewed" if attempted and completed is not None else "unavailable",

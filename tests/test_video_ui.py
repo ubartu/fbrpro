@@ -60,6 +60,18 @@ class ReviewServerTests(unittest.TestCase):
         status, _, body = self.call("GET", "/api/status")
         self.assertEqual(json.loads(body)["tracking_pipeline"], "stable-0244d67-recovery")
 
+    def test_event_analysis_aligns_and_attributes_without_running_detector(self):
+        from test_video_events import ALIGN, predictions, tracking
+
+        data = json.dumps({"tracking": tracking(), "predictions": predictions(), "alignment": ALIGN}).encode()
+        headers = {"X-FBRPRO-Video": "1", "Content-Type": "application/json"}
+        with patch.object(video_ui.video_tracking, "run") as detector:
+            status, _, body = self.call("POST", "/api/video-events", headers=headers, body=data)
+        detector.assert_not_called()
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["player_pass_attempts"], {"passer": 1})
+        self.assertEqual(self.call("POST", "/api/video-events", body=data)[0], 403)
+
     def setUp(self):
         scratch = self.enterContext(TemporaryDirectory())
         video = Path(scratch) / "sample.mp4"

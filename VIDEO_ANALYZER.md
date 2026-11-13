@@ -184,12 +184,23 @@ calibration when tracking that exact demo file again.
   runoff when a touchline is hard to see.
 - A second look at overlapping, enlarged parts of the pitch helps detect
   smaller players in wide shots. Color agreement can help preserve a track.
-  Occlusion, camera cuts and very small players can still produce gaps.
+  When a player disappears behind another, the tracker holds the original ID
+  briefly and checks the returning box against the player's recent movement,
+  box size and available shirt colour. After each shot it can reconnect a
+  fragment using clear shirt crops and camera-compensated paths on both sides
+  of the overlap. Competing matches stay separate. Run tracking again to apply
+  the new association to saved footage and export updated identity maps.
+- The footage overlay draws the visible straight edges of the calibrated
+  pitch. It can follow camera motion briefly when visible paint supports the
+  alignment, then hides the outline when support is lost. The detector uses
+  its own boundary throughout.
 - Several clear torso crops describe each player's shirt, including dark and
   mixed colours. Two distinct groups that repeatedly appear together establish
   **Team A** and **Team B**. Those kit profiles apply throughout the recording,
   including close views before and after the wide shot. Shirt grouping uses
   people detected on the pitch, with camera projection checked separately.
+  Once the two kits are established, consecutive clear shirt crops can also
+  colour brief track fragments and recover the kit on individual frames.
   Unclear tracks and officials can remain
   unassigned. The groups are separate from the reviewed lineup.
 - A distinct shirt and sustained positions along the same touchline identify
@@ -396,6 +407,11 @@ pitch mask to both the annotations and detections, and excludes ball boxes.
 It exports sampled MOT text files and reports TrackEval HOTA, DetA, AssA,
 and ID switches. These are scoped comparisons against FBRPRO's processing
 settings and differ from the official challenge protocol.
+
+Add `--compare-reconnection` in a benchmark environment with Ultralytics
+and `lap` installed to include FBRPRO's offline reconnection and BoT-SORT.
+BoT-SORT receives the same detected boxes, camera transforms, and shirt-crop
+features. This benchmark tests association on the supplied detections.
 
 ## Testing ball recognition around match actions
 

@@ -6,17 +6,30 @@ analysis request: it does not rerun detection, replace tracks, move the playhead
 change team labels or add work to replay frames. Existing stable tracking reports
 are supported; rerunning a video just to obtain statistics is unnecessary.
 
+**Players** starts with a single frame containing simultaneously visible,
+team-assigned players. Filter by team or choose **Team unconfirmed** to correct
+an assignment. **Use current frame** follows the playhead, and **All track
+fragments** reveals the complete list. Saved team corrections apply when you
+calculate statistics again.
+
+In **Actions to review**, pause on an action and choose the player at the
+playhead. Select the action and its outcome where available, then save it.
+Calculate statistics again to see the reviewed observations on that player's
+profile. **Export review context** preserves tags and team corrections for
+another session.
+
 ## Available measurements
 
 | Category | Implemented outputs | Evidence needed |
 | --- | --- | --- |
 | Positioning | Average position, 6×4 heatmap, 3×3 zone occupancy, position width/depth, zone transitions | Contiguous usable pitch positions; unknown boundary time is separate |
-| Movement | Observed distance, forward/backward/lateral displacement, run direction time | Reviewed live play, orientation, scale/calibration and low-error continuous windows; team direction for directional outputs |
+| Movement | Distance and rate as a share of the pitch, sideways displacement, forward/backward displacement | Continuous mapped positions with movement above mapping uncertainty. Forward and backward also need consistent orientation and a confirmed attacking direction |
+| Movement in metres | Observed distance, forward/backward/lateral displacement, run direction time | Reviewed live play, orientation, scale/calibration and low-error continuous windows. Team direction for directional outputs |
 | Physical estimates | Mean/window-maximum speed, high-speed distance/time, sprint bouts/distance, window acceleration/deceleration maxima and bouts | The same physical quality gates; at least one second/five samples per window |
 | Relationships | Distance to ground ball, nearest teammate/opponent, own/opposition defensive line | Coincident usable observations; ground-ball review for ball distance; reviewed line membership for line distances |
 | Observed team shape | Centroid, width, length, mean radius/compactness, convex-hull area, observed player count, line spacing | At least three simultaneously visible teammates; reviewed lines for line spacing |
 | Off-ball evidence | Support runs, overlaps, recovery runs, passing lanes, pressure approaches, central screening, deep-to-advanced support, deep outlets, between-line availability/receptions | Reviewed phases, possession team/carrier/lines as applicable, live play and direction; reception arrival events for receptions |
-| Reviewed actions | Pass attempts/completions/rate, receptions, touches, tackles/wins, interceptions, shots, press attempts/success | Confirmed identity, reviewed events, complete event-type coverage and outcomes where required |
+| Reviewed actions | Pass attempts/completions/rate, receptions, touches, tackles/wins, interceptions, shots, press attempts/success | A reviewed action at an observed track sample provides a partial count. Complete totals require confirmed identity, full event-type coverage and outcomes where applicable |
 | Possession | Team possession time/share and review coverage | Reviewed possession intervals; proximity does not establish possession |
 
 Off-ball movements and ball-transfer proximity patterns are **candidates for
@@ -29,7 +42,8 @@ unavailable without evidence of actual individual ball control.
 
 Position maps and observed team geometry are provisional by default. Physical
 values require live play, verified actual pitch dimensions, consistent pitch
-orientation and reviewed pitch alignment. Use the scope controls to exclude
+orientation and reviewed pitch alignment. Enter the stadium dimensions in the
+scope controls when available. Use the scope controls to exclude
 replays and close-ups. Confirm ground-ball positions only where applicable.
 Set attacking directions separately by team and period. For video-only full
 recordings, enter the actual second-half start in video seconds; the selector

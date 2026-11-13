@@ -240,7 +240,7 @@ class LinePitchModel:
         self.projection_fit, self.projection_stamp = matrix, stamp
         return matrix @ np.diag([640/w, 360/h, 1.]), quality
 
-    def follow(self, image, matrix):
+    def follow(self, image, matrix, quality=None):
         cv2, np = self.cv2, self.np
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         ridge = cv2.morphologyEx(hsv[:, :, 2], cv2.MORPH_TOPHAT, np.ones((9, 9), np.uint8))
@@ -249,7 +249,7 @@ class LinePitchModel:
         height, width = image.shape[:2]
         inverse = np.linalg.inv(matrix)
         supported = 0
-        for name in self.previous_quality["matched_line_names"]:
+        for name in (quality or self.previous_quality)["matched_line_names"]:
             points = np.asarray(self.lines[name], np.float32)
             if len(points) != 2:
                 continue
@@ -263,6 +263,11 @@ class LinePitchModel:
             x, y = np.rint(pixels).astype(int).T
             supported += np.mean(distances[y, x] <= 4) >= .65
         return supported >= 3
+
+    def supports_display(self, frame, matrix, quality):
+        h, w = frame.shape[:2]
+        image = self.cv2.resize(frame, (640, 360))
+        return self.follow(image, matrix @ self.np.diag([w/640, h/360, 1.]), quality)
 
     def checked_landmarks(self, frame, observed):
         if self.landmark is None or len(observed) < 3:

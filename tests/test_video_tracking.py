@@ -6,8 +6,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from football_normalizer.video_motion import CameraMotion
+from football_normalizer.video_track_links import reconnect_shot
 from football_normalizer.video_tracking import (
-    CameraFollow, Detection, Tracker, calibration_from, canonical_rows, identity_from, kit_sample, object_row,
+    Calibration, CameraFollow, Detection, PitchOverlay, Tracker, calibration_from, canonical_rows, identity_from, kit_sample, object_row,
     pitch_detections, follow_pitch_boundary, run,
 )
 
@@ -17,6 +18,54 @@ def person(x):
 
 
 class TrackingTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
+                         "optional vision dependencies not installed")
+    def test_pitch_overlay_moves_with_zoom_and_hides_when_paint_is_lost(self):
+        import cv2
+        import numpy as np
+
+        frame = np.zeros((120, 160, 3), np.uint8)
+        matrix = np.array([[1., 0, -25], [0, 1, -20], [0, 0, 1]])
+        calibration = Calibration("s", None, None, matrix, "automatic", 0, 0)
+        overlay = PitchOverlay(cv2, np, 105, 68)
+        quality = {"matched_line_names": ["Side line top"], "projection_disagreement_m": 0.2}
+        zoom = np.array([[1.1, 0, -8.], [0, 1.1, -6.]])
+        initial = overlay.update(frame, 0, calibration, quality, None, None)
+        self.assertEqual(initial["segments_xy"][0], [[25., 20.], [130., 20.]])
+        supported = Mock(return_value=True)
+        followed = overlay.update(frame, 100, None, None, zoom, supported)
+        self.assertEqual(followed["segments_xy"][0], [[19.5, 16.], [135., 16.]])
+        self.assertEqual(followed["source"], "camera_followed")
+        self.assertIsNone(overlay.update(frame, 200, None, None, zoom, Mock(return_value=False)))
+        self.assertIsNone(overlay.update(frame, 300, None, None, zoom, supported))
+        overlay.update(frame, 400, calibration, quality, None, None)
+        overlay.reset()
+        self.assertIsNone(overlay.update(frame, 500, None, None, zoom, supported))
+
+    @unittest.skipUnless(importlib.util.find_spec("numpy"), "optional vision dependencies not installed")
+    def test_reconnect_shot_uses_clear_future_crops_and_keeps_ambiguous_ids(self):
+        import numpy as np
+
+        def row(id_, x, kit):
+            return {"track_id": id_, "object_type": "player", "observed": True,
+                    "bbox_xyxy": [x, 20, x+14, 60], "_shirt_appearance": np.tile(kit, 3)}
+
+        red, white = [50, 155, 150], [130, 125, 125]
+        for competing in (False, True):
+            frames = [{"video_time_ms": i*100, "objects": [row("other", 53 if i == 2 else 130, white)]} for i in range(8)]
+            for i in range(3):
+                frames[i]["objects"].append(row("early", 37+5*i, red))
+            for i in range(5, 8):
+                frames[i]["objects"].append(row("late", 37+5*i-(7 if competing else 0), red))
+                if competing:
+                    frames[i]["objects"].append(row("similar", 44+5*i, red))
+            motion = [None]+[np.eye(3)[:2]]*7
+            before = [[r["bbox_xyxy"] for r in f["objects"]] for f in frames]
+            links = reconnect_shot(np, frames, motion, (180, 120))
+            self.assertEqual(links, [] if competing else [{"from_track_id": "late", "to_track_id": "early"}])
+            self.assertEqual(before, [[r["bbox_xyxy"] for r in f["objects"]] for f in frames])
+            self.assertEqual(frames[-1]["objects"][1]["track_id"], "late" if competing else "early")
+
     @unittest.skipUnless(importlib.util.find_spec("cv2") and importlib.util.find_spec("numpy"),
                          "optional vision dependencies not installed")
     def test_short_outline_recovery_requires_camera_motion_turf_and_recent_anchor(self):
@@ -241,6 +290,41 @@ class TrackingTests(unittest.TestCase):
         self.assertEqual([t.id for t in tracker.update([person(20)], 800)], ids[:1])
         tracker.reset()
         self.assertNotIn(tracker.update([person(20)], 1000)[0].id, ids)
+
+    def test_player_reuses_id_after_brief_overlap(self):
+        def kit(x, color):
+            return Detection("player", .9, person(x).box, color)
+
+        tracker = Tracker("clip")
+        red, white = (t.id for t in tracker.update([kit(10, "red"), kit(30, "white")], 0))
+        tracker.update([kit(20, "red"), kit(30, "white")], 100)
+        for t_ms in range(200, 1000, 100):
+            tracks = tracker.update([kit(30, "white")], t_ms)
+            self.assertEqual([t.id for t in tracks if not t.missing], [white])
+        returning = {t.id: t.last.box for t in tracker.update([kit(30, "white"), kit(100, "red")], 1000) if not t.missing}
+        self.assertEqual(returning, {white: person(30).box, red: person(100).box})
+
+    def test_ambiguous_overlap_return_does_not_reuse_an_id(self):
+        tracker = Tracker("clip")
+        red = Detection("player", .9, person(10).box, "red")
+        white = Detection("player", .9, person(30).box, "white")
+        hidden = tracker.update([red, white], 0)[0].id
+        tracker.update([Detection("player", .9, person(20).box, "red"), white], 100)
+        tracker.update([white], 200)
+        tracks = tracker.update([white, Detection("player", .9, person(88).box, "red"),
+                                 Detection("player", .9, person(96).box, "red")], 1000)
+        self.assertTrue(next(t for t in tracks if t.id == hidden).missing)
+        self.assertEqual(sum(not t.missing for t in tracks), 3)
+
+    def test_player_at_image_edge_does_not_take_hidden_players_id(self):
+        tracker = Tracker("clip", frame_size=(115, 100))
+        white = Detection("player", .9, person(30).box, "white")
+        hidden = tracker.update([Detection("player", .9, person(10).box, "red"), white], 0)[0].id
+        tracker.update([Detection("player", .9, person(20).box, "red"), white], 100)
+        tracker.update([white], 200)
+        tracks = tracker.update([white, Detection("player", .9, person(100).box, "red")], 1000)
+        self.assertTrue(next(t for t in tracks if t.id == hidden).missing)
+        self.assertEqual(sum(not t.missing for t in tracks), 2)
 
     def test_reviewed_mapping_rejects_unknown_or_wrong_team_player(self):
         plan = {"team_id": "home", "players": [{"id": "known"}]}

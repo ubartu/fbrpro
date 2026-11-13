@@ -150,7 +150,7 @@ def _new_player(id_, metadata):
     return {"id": id_, "track_id": metadata.get("track_id", id_), "player_id": metadata.get("player_id"),
             "team": metadata.get("team"), "_usable_ms": 0, "_position": {}, "_bounds": None,
             "_heatmap": [0]*24, "_zones": [0]*9, "_zone_uncertain_ms": 0,
-            "_transitions": defaultdict(int), "_relations": {}, "_physical_windows": [],
+            "_transitions": defaultdict(int), "_relations": {}, "_relative_windows": [], "_physical_windows": [],
             "_geometry_interval_ms": 0, "_rejected_interval_ms": 0}
 
 
@@ -272,13 +272,21 @@ def calculate(prepared):
     physical_gate = ("Confirm actual pitch dimensions before physical measurement" if not scale_verified else
                      "Confirm pitch orientation before physical measurement" if not orientation_confirmed else
                      "Review camera calibration before physical measurement" if not calibration_reviewed else None)
-    def flush(id_):
-        state = pending.pop(id_, None)
-        if state:
-            window = _regression_window(state["rows"], state["direction"])
-            if window:
-                window["chain"] = state["chain"]
-                players[id_]["_physical_windows"].append(window)
+    def flush(key):
+        rows, chain = pending.pop(key)
+        window = _regression_window(rows, chain[-1])
+        if window:
+            window["chain"] = chain
+            players[key[0]][key[1]].append(window)
+
+    def extend(key, start, end, chain):
+        if key in pending and pending[key][1] != chain:
+            flush(key)
+        samples, _ = pending.setdefault(key, ([start], chain))
+        samples.append(end)
+        if end[0]-samples[0][0] >= 1000:
+            flush(key)
+
     previous = None
     for frame in frames:
         if ambiguous:
@@ -315,23 +323,18 @@ def calculate(prepared):
                         player["_zone_uncertain_ms"] += dt
                         if first is not None and last is not None and first != last:
                             player["_transitions"][first, last] += 1
-                physical_ok = (physical_gate is None and previous.get("live") is True and frame.get("live") is True
-                               and max(a.get("error_m", 99), b.get("error_m", 99)) < 1.5
-                               and _distance(_point(a), _point(b)) <= 13*dt/1000)
-                if physical_ok:
-                    direction = prepared.get("directions", {}).get(str(frame.get("period")), {}).get(b.get("team"))
-                    chain = (frame.get("segment_id"), frame.get("period"), b.get("team"), b.get("player_id"), direction)
-                    state = pending.get(id_)
-                    if state and state["chain"] != chain:
-                        flush(id_)
-                        state = None
-                    if state is None:
-                        state = {"rows": [(previous["t_ms"], a)], "direction": direction, "chain": chain}
-                        pending[id_] = state
-                    state["rows"].append((frame["t_ms"], b))
-                    extended.add(id_)
-                    if frame["t_ms"]-state["rows"][0][0] >= 1000:
-                        flush(id_)
+                direction = prepared.get("directions", {}).get(str(frame.get("period")), {}).get(b.get("team"))
+                chain = (frame.get("segment_id"), frame.get("period"), b.get("team"), b.get("player_id"), direction)
+                start, end = (previous["t_ms"], a), (frame["t_ms"], b)
+                key = (id_, "_relative_windows")
+                extend(key, start, end, chain)
+                extended.add(key)
+                if (physical_gate is None and previous.get("live") is True and frame.get("live") is True
+                        and max(a.get("error_m", 99), b.get("error_m", 99)) < 1.5
+                        and _distance(_point(a), _point(b)) <= 13*dt/1000):
+                    key = (id_, "_physical_windows")
+                    extend(key, start, end, chain)
+                    extended.add(key)
             # Counterpart positions must pass the same interval validity checks
             # as the subject. A teleporting teammate is not a valid relation.
             first_view = {**previous, "players": [earlier[id_] for id_ in usable]}
@@ -355,12 +358,12 @@ def calculate(prepared):
                     for key in before:
                         if before[key] is not None and after[key] is not None:
                             _weighted_add(item["_shape"], key, (before[key]+after[key])/2, dt)
-        for id_ in list(pending):
-            if id_ not in extended:
-                flush(id_)
+        for key in list(pending):
+            if key not in extended:
+                flush(key)
         previous = frame
-    for id_ in list(pending):
-        flush(id_)
+    for key in list(pending):
+        flush(key)
     observed = {}
     for id_, stamps in prepared.get("observed_by_track", {}).items():
         observed[id_] = sum(b["t_ms"]-a["t_ms"] for a, b in zip(stamps, stamps[1:]) if _continuous(a, b, limit))
@@ -371,10 +374,12 @@ def calculate(prepared):
         time = player["_usable_ms"]
         observed_time = max(observed.get(id_, player["_geometry_interval_ms"]), time)
         bounds = player["_bounds"]
-        physical = _physical_result(player["_physical_windows"], config, physical_gate)
+        relative = player["_relative_windows"]
+        windows = player["_physical_windows"]
+        resolved = [w for w in relative if not w["below_noise"]]
+        physical = _physical_result(windows, config, physical_gate)
         if id_ in ambiguous:
             physical["reason"] = "Conflicting identities or teams on this track require review"
-        windows = player["_physical_windows"]
         directional = [w for w in windows if w["direction"] in (-1, 1)]
         movements = {"forward_m": 0., "backward_m": 0., "lateral_m": 0.}
         runs = {"forward": 0, "backward": 0, "lateral": 0, "stationary": 0}
@@ -398,14 +403,27 @@ def calculate(prepared):
             "zones": {"columns": 3, "rows": 3, "time_ms": player["_zones"],
                       "pct": [round(100*v/time, 2) if time else None for v in player["_zones"]],
                       "uncertain_ms": player["_zone_uncertain_ms"]}}
-        movement = {"status": physical["status"], "reason": physical["reason"],
+        relative_time = sum(w["duration_ms"] for w in relative)
+        relative_distance = sum(w["distance"] for w in resolved)*100/length
+        relative_directional = [w for w in resolved if w["direction"] in (-1, 1)]
+        movement = {"status": "estimate" if resolved or windows else "unavailable",
+                    "reason": None if resolved or windows else (
+                        "Movement stayed within mapping uncertainty in the usable windows" if relative else
+                        "Need at least one second of continuous pitch positions"),
+                    "relative_distance_pct": _rounded(relative_distance) if resolved else None,
+                    "relative_rate_pct_s": _rounded(relative_distance*1000/relative_time) if resolved else None,
+                    "relative_usable_ms": relative_time,
+                    "relative_unresolved_ms": sum(w["duration_ms"] for w in relative if w["below_noise"]),
+                    "relative_forward_pct": _rounded(sum(max(0, w["dx"]*w["direction"]) for w in relative_directional)*100/length) if relative_directional else None,
+                    "relative_backward_pct": _rounded(sum(max(0, -w["dx"]*w["direction"]) for w in relative_directional)*100/length) if relative_directional else None,
+                    "relative_lateral_pct": _rounded(sum(abs(w["dy"]) for w in resolved)*100/width) if resolved else None,
                     "observed_distance_m": _rounded(sum(w["distance"] for w in windows)) if windows else None,
                     **{key: _rounded(v) if directional else None for key, v in movements.items()},
                     "directional_time_ms": sum(w["duration_ms"] for w in directional),
                     "run_directions_ms": runs if directional else {key: None for key in runs},
-                    "direction_reason": None if directional else "Confirm team attacking direction for usable live intervals",
+                    "direction_reason": None if relative_directional or directional else "Forward and backward movement need a confirmed attacking direction",
                     "zone_transitions": [{"from": a, "to": b, "count": n} for (a, b), n in sorted(player["_transitions"].items())],
-                    "measurement": "Observed low-noise window displacement; gaps and camera cuts excluded"}
+                    "measurement": "Pitch-relative estimates use continuous observed positions and include only movement above mapping uncertainty."}
         relationships = {key: _rounded(_weighted(player["_relations"], key)) for key in relation_keys}
         relationships["coverage_ms"] = {key: player["_relations"].get(key, (0, 0))[1] for key in relation_keys}
         relationships["status"] = "estimate" if any(relationships[key] is not None for key in relation_keys) else "unavailable"

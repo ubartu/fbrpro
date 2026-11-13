@@ -116,3 +116,28 @@ def assign_groups(np, tracks, vectors, profiles, centers):
         if scores[best] <= KIT_RADIUS and scores[1-best]-scores[best] >= 6:
             assignments[track] = ("team_a" if best == 0 else "team_b", profiles[track][1])
     return assignments
+
+
+def local_kit_groups(appearances, centers):
+    """Use consecutive clear shirt crops after the two kits are established."""
+    import numpy as np
+
+    if not appearances:
+        return {}
+    times, vectors = zip(*sorted(appearances.items()))
+    scores = distance(np, np.stack(vectors)[:, None], centers)
+    result, run = {}, []
+    for stamp, pair in zip(times, scores):
+        best = int(np.argmin(pair))
+        group = best if pair[best] <= KIT_RADIUS and pair[1-best]-pair[best] >= 6 else None
+        if run and (group != run[-1][1] or stamp-run[-1][0] > 250):
+            run.clear()
+        if group is None:
+            continue
+        run.append((stamp, group))
+        if len(run) >= 2 and stamp-run[0][0] >= 70:
+            label = "team_a" if group == 0 else "team_b"
+            for previous, _ in run:
+                result[previous] = label
+            run = run[-1:]
+    return result

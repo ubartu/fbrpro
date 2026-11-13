@@ -8,6 +8,7 @@ from .video_stats_common import prepare
 
 
 VERSION = "fbrpro-video-stats-v1"
+DEFINITION_VERSION = "fbrpro-observed-video-statistics-v2"
 
 
 def analyze(tracking, context=None):
@@ -22,27 +23,40 @@ def analyze(tracking, context=None):
     players = {p["id"]: p for p in physical["players"]}
     for p in behaviors.get("players", []):
         players.setdefault(p["id"], {**prepared["tracks"][p["id"]]}).update(p)
+    snapshot = None
+    best_score = None
+    for frame in prepared["frames"]:
+        if frame["live"] is False:
+            continue
+        visible = [players[p["id"]] for p in frame["players"] if players[p["id"]]["coverage"]["usable_ms"] > 0]
+        if not visible:
+            continue
+        score = (sum(bool(p.get("team")) for p in visible), len(visible),
+                 sum(p["coverage"]["usable_ms"] for p in visible))
+        if best_score is None or score > best_score:
+            best_score = score
+            snapshot = {"t_ms": frame["t_ms"], "track_ids": [p["id"] for p in visible]}
     digest = hashlib.sha256(json.dumps({"source_sha256": tracking.get("source_sha256"),
         "model_sha256": tracking.get("model_sha256"), "plan_id": tracking.get("plan_id"),
-        "context": prepared["context"], "definition_version": "fbrpro-observed-video-statistics-v1",
+        "context": prepared["context"], "definition_version": DEFINITION_VERSION,
         "measurement_metadata": {key: tracking.get(key) for key in ("coordinate_frame", "coordinate_length_m", "coordinate_width_m", "dimensions_assumed", "sample_fps", "clips")}}, sort_keys=True, allow_nan=False).encode())
     for frame in tracking["frames"]:
         digest.update(json.dumps(frame, sort_keys=True, allow_nan=False).encode())
     fingerprint = digest.hexdigest()
-    return {"version": VERSION, "definition_version": "fbrpro-observed-video-statistics-v1",
+    return {"version": VERSION, "definition_version": DEFINITION_VERSION,
             **{key: tracking.get(key) for key in ("match_id", "video_id", "plan_id", "source_sha256")},
             "analysis_scope": "selected_observed_video", "analysis_fingerprint": fingerprint,
             "coordinate_length_m": prepared["length"], "coordinate_width_m": prepared["width"],
             "scope_spans": prepared["scope_spans"], "scope_ms": prepared["scope_ms"],
             "quality": prepared["quality"], "config": prepared["config"], "context": prepared["context"],
-            "players": list(players.values()), "teams": physical.get("teams", []),
+            "players": list(players.values()), "lineup_snapshot": snapshot, "teams": physical.get("teams", []),
             "event_candidates": behaviors.get("event_candidates", []), "possession": behaviors.get("possession", {}),
             "notes": ["Calculated separately from tracking. Source detections, IDs and replay coordinates are unchanged.",
                       "Statistics describe observable video scope, never extrapolated full-match totals.",
                       "Track IDs are not shirt numbers; identities and teams need review.",
                       "Automatic mappings and physical values are estimates, not validated GPS measurements.",
                       "Off-ball geometry and ball proximity candidates do not prove tactical intent or possession.",
-                      "Unavailable event metrics need reviewed identities, events and complete coverage annotations.",
+                      "Reviewed actions on visible tracks provide partial counts. Complete totals require confirmed identities and event coverage.",
                       *behaviors.get("notes", [])]}
 
 

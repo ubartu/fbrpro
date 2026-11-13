@@ -4,7 +4,7 @@ from bisect import bisect_left
 from collections import Counter, defaultdict
 from math import isfinite
 
-from .video_kits import KIT_RADIUS, distance, shirt_profiles, team_groups
+from .video_kits import KIT_RADIUS, distance, local_kit_groups, shirt_profiles, team_groups
 
 
 VERSION = "fbrpro-video-role-hints-v1"
@@ -274,6 +274,20 @@ def _annotate_shot(frames, length, width, usable_pitch, reference, shirt_groups)
             row["inferred_goal_end"] = end
         confirmed.append({"track_id": track, "inferred_goal_end": end, "kit_color_hint": hue, **summary})
     referees = _annotate_referees(tracks, reference, length, width) if shirt_groups else []
+    if shirt_groups and pair:
+        protected = {r["track_id"] for r in referees + confirmed}
+        for track, samples in tracks.items():
+            if track in protected or any(row.get("team_id") or row.get("player_id") for _, _, row in samples):
+                continue
+            local = local_kit_groups(appearances[track], reference)
+            for stamp, _, row in samples:
+                if stamp in local and _shirt_visible(row):
+                    prior = row.get("inferred_team")
+                    if prior:
+                        counts[prior.removeprefix("kit:")] -= 1
+                    group = local[stamp]
+                    row["inferred_team"] = f"kit:{group}"
+                    counts[group] += 1
     return {"video_start_ms": frames[0]["video_time_ms"], "video_end_ms": frames[-1]["video_time_ms"],
             "team_status": team_status,
             "kit_groups": [{"inferred_team": f"kit:{group}", "kit_color_hint": None if shirt_groups else group,

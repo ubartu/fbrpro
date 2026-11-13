@@ -1,0 +1,85 @@
+{
+  "version": "fbrpro-video-event-reference-v1",
+  "scope": "Selected event examples with approximate times. Unlisted moments and classes have no coverage assertion.",
+  "clips": [
+    {
+      "video": "0bfacc_0.mp4",
+      "source_sha256": "43d342c78fbb40e522f48ab378fbee83b5b880d35c056836e0d493ec2b15ee51",
+      "reference_tracking": "0bfacc_0-tracking.json from stable-restoration/continuity-fix",
+      "events": [
+        {
+          "id": "stuttgart-pass-1", "type": "pass", "t_ms": 2420, "tolerance_ms": 160,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:4", "team_appearance": "white",
+          "outcome": "complete", "reception_id": "stuttgart-reception-1",
+          "evidence_ms": [2320, 4120]
+        },
+        {
+          "id": "stuttgart-reception-1", "type": "reception", "t_ms": 3580, "tolerance_ms": 240,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:1", "team_appearance": "white",
+          "evidence_ms": [3320, 4120]
+        },
+        {
+          "id": "stuttgart-pass-2", "type": "pass", "t_ms": 7220, "tolerance_ms": 160,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:15", "team_appearance": "white",
+          "outcome": "complete", "reception_id": "stuttgart-reception-2",
+          "evidence_ms": [7120, 8720]
+        },
+        {
+          "id": "stuttgart-reception-2", "type": "reception", "t_ms": 8280, "tolerance_ms": 240,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:4", "team_appearance": "white",
+          "evidence_ms": [8120, 8720]
+        }
+      ],
+      "conditions": [
+        {"type": "player_overlap", "start_ms": 24320, "end_ms": 25320, "note": "A red-shirted player overlaps a white-shirted player and reappears."},
+        {"type": "ball_track_error", "start_ms": 8320, "end_ms": 8520, "note": "The tracked ball jumps away from the visible reception and returns."}
+      ]
+    },
+    {
+      "video": "08fd33_0.mp4",
+      "source_sha256": "07886454cec2e859edb69b1bef5a3013fed54b887d9b8c5d563619bb511c1766",
+      "reference_tracking": "08fd33_0-tracking.json from stable-restoration/continuity-fix",
+      "events": [
+        {
+          "id": "wide-short-pass-1", "type": "pass", "t_ms": 4620, "tolerance_ms": 160,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:2", "team_appearance": "white",
+          "outcome": "complete", "reception_id": "wide-short-reception-1", "evidence_ms": [4400, 5720],
+          "note": "The tracker missed the ball sample during the release. The ball travels toward a white-shirted teammate who controls it."
+        },
+        {
+          "id": "wide-short-reception-1", "type": "reception", "t_ms": 5420, "tolerance_ms": 200,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:4", "team_appearance": "white", "evidence_ms": [5320, 5720]
+        },
+        {
+          "id": "wide-pass-1", "type": "pass", "t_ms": 17280, "tolerance_ms": 200,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:25", "team_appearance": "white",
+          "outcome": "incomplete", "evidence_ms": [17120, 19520],
+          "note": "The ball runs beyond the white-shirted runner and a green-shirted opponent plays it away. No controlled reception by a white-shirted player is visible."
+        },
+        {
+          "id": "wide-short-pass-2", "type": "pass", "t_ms": 28760, "tolerance_ms": 160,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:18", "team_appearance": "green",
+          "outcome": "complete", "reception_id": "wide-short-reception-2", "evidence_ms": [28400, 29800]
+        },
+        {
+          "id": "wide-short-reception-2", "type": "reception", "t_ms": 29720, "tolerance_ms": 160,
+          "track_id": "preview-clip:pitch-v2-lines-ball-fps10:8", "team_appearance": "green", "evidence_ms": [29520, 29800]
+        }
+      ]
+    },
+    {
+      "video": "SNMOT-136",
+      "provenance": "SoccerNet Tracking gameinfo.ini",
+      "events": [
+        {"id": "snmot-136-shot", "type": "shot", "t_ms": 15532, "outcome": "on_target", "track_id": null}
+      ]
+    }
+  ],
+  "constructed_cases": [
+    {
+      "type": "camera_cut", "cut_at_ms": 7200,
+      "edit": "Play 0bfacc_0.mp4 from 0 to 7200 ms, then switch to 08fd33_0.mp4 at 17200 ms.",
+      "expectation": "Ball and player evidence on opposite sides of the edit cannot support one release."
+    }
+  ]
+}

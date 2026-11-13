@@ -7,9 +7,12 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from time import perf_counter
+from types import SimpleNamespace
 
+from .video_kits import shirt_appearance
 from .video_motion import CameraMotion
 from .video_pitch import detect_pitch
+from .video_track_links import reconnect_shot
 from .video_tracking import Detection, Tracker, YoloX, kit_sample, vision
 
 
@@ -95,9 +98,34 @@ def samples(sequence, stride, *, object_type="player"):
     ]
 
 
-def tracker_output(frames, kind, fps, transforms=None):
+def tracker_output(frames, kind, fps, transforms=None, *, appearances=None, size=None):
     import numpy as np
-    if kind == "bytetrack":
+    if kind == "botsort":
+        from ultralytics.engine.results import Boxes
+        from ultralytics.trackers.bot_sort import BOTSORT
+        from ultralytics.trackers.utils.stracks import multi_gmc
+
+        class CameraBoTSORT(BOTSORT):
+            def _pre_first_associate(self, strack_pool, unconfirmed, img, results_high):
+                if self.motion is not None:
+                    multi_gmc(strack_pool, self.motion)
+                    multi_gmc(unconfirmed, self.motion)
+
+        config = SimpleNamespace(track_high_thresh=.23, track_low_thresh=.10, new_track_thresh=.23,
+                                 track_buffer=max(2, round(fps*.8)), match_thresh=.8, fuse_score=False,
+                                 gmc_method=None, proximity_thresh=.3, appearance_thresh=.8,
+                                 with_reid=appearances is not None, model="auto")
+        tracker = CameraBoTSORT(config)
+        for i, detections in enumerate(frames):
+            tracker.motion = transforms[i] if transforms is not None else None
+            boxes = np.asarray([(*d.box, d.confidence, 0) for d in detections], dtype=np.float32).reshape(-1, 6)
+            features = None
+            if appearances is not None:
+                features = np.asarray([np.r_[np.asarray(kit)-[90, 128, 128]*3, 20] if kit is not None
+                                       else np.r_[np.zeros(9), -20] for kit in appearances[i]], dtype=np.float32).reshape(-1, 10)
+            result = tracker.update(Boxes(boxes, (size[1], size[0])), feats=features)
+            yield [(int(row[4]), detections[int(row[-1])].box) for row in result]
+    elif kind == "bytetrack":
         from supervision import ByteTrack, Detections
         tracker = ByteTrack(track_activation_threshold=.23, lost_track_buffer=24, frame_rate=round(fps))
         for detections in frames:
@@ -121,10 +149,22 @@ def tracker_output(frames, kind, fps, transforms=None):
                 return [(costs[i, j], i, j) for i, j in zip(rows, columns) if costs[i, j]<0]
 
         factory = GlobalTracker if kind in {"global", "camera_global"} else Tracker
-        tracker = factory("benchmark", max_gap_ms=max(800, round(2000/fps)))
+        tracker = factory("benchmark", max_gap_ms=max(800, round(2000/fps)), frame_size=size)
+        collected = []
         for i, detections in enumerate(frames):
             camera = transforms[i] if transforms is not None else None
-            yield [(t.id, t.last.box) for t in tracker.update(detections, round(i*1000/fps), camera) if not t.missing]
+            stamp = round(i*1000/fps)
+            tracks = [(t.id, t.last) for t in tracker.update(detections, stamp, camera) if not t.missing]
+            if kind != "camera_reconnect":
+                yield [(id_, d.box) for id_, d in tracks]
+                continue
+            crops = {id(d): kit for d, kit in zip(detections, appearances[i], strict=True)}
+            rows = [{"track_id": id_, "bbox_xyxy": d.box, "object_type": "player", "observed": True,
+                     **({"_shirt_appearance": crops[id(d)]} if crops[id(d)] is not None else {})} for id_, d in tracks]
+            collected.append({"video_time_ms": stamp, "objects": rows})
+        if kind == "camera_reconnect":
+            reconnect_shot(np, collected, transforms, size)
+            yield from ([(row["track_id"], row["bbox_xyxy"]) for row in f["objects"]] for f in collected)
 
 
 def evaluate(truth, predictions, hota, clear):
@@ -195,6 +235,16 @@ def camera_transforms(sequence, stride, inputs):
             for (_, path, _), frame in zip(source, inputs, strict=True)]
 
 
+def appearance_inputs(sequence, stride, inputs):
+    cv2, np = vision()
+    _, source = samples(sequence, stride)
+    crops = []
+    for (_, path, _), frame in zip(source, inputs, strict=True):
+        image = cv2.imread(str(path))
+        crops.append([shirt_appearance(cv2, np, image, d.box) for d in frame])
+    return crops, (image.shape[1], image.shape[0])
+
+
 def main(argv=None):
     from trackeval.metrics import CLEAR, HOTA
 
@@ -205,6 +255,7 @@ def main(argv=None):
     p.add_argument("--coreml", action="store_true", help="Run the football detector with ONNX Runtime and CoreML")
     p.add_argument("--stride", type=int, default=5)
     p.add_argument("--output", required=True, type=Path)
+    p.add_argument("--compare-reconnection", action="store_true", help="Include offline reconnection and BoT-SORT on the same boxes")
     args = p.parse_args(argv)
     if args.stride < 1:
         p.error("The sample stride must be positive.")
@@ -230,10 +281,16 @@ def main(argv=None):
         (out / "source-frames.json").write_text(json.dumps(frames))
         for name, inputs in (("annotated_boxes", [[d for _, d in rows] for rows in gt]), ("detector", detections)):
             transforms = camera_transforms(sequence, args.stride, inputs)
-            for kind in ("current", "bytetrack", "global", "camera", "camera_global"):
+            kinds = ["current", "bytetrack", "global", "camera", "camera_global"]
+            crops, size = None, None
+            if args.compare_reconnection:
+                kinds.extend(("camera_reconnect", "botsort"))
+                crops, size = appearance_inputs(sequence, args.stride, inputs)
+            for kind in kinds:
                 key = f"{name}/{kind}"
                 start = perf_counter()
-                predicted = list(tracker_output(inputs, kind, fps, transforms if kind.startswith("camera") else None))
+                predicted = list(tracker_output(inputs, kind, fps, transforms if kind.startswith("camera") or kind == "botsort" else None,
+                                                appearances=crops, size=size))
                 row["runs"][key] = {"tracker_seconds": round(perf_counter()-start, 3)}
                 h, c = evaluate(gt_boxes, predicted, hota, clear)
                 scores[key][sequence.name] = (h, c)

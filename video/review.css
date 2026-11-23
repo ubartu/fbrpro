@@ -80,3 +80,13 @@ button:hover:not(:disabled){filter:brightness(1.1)}button.secondary{background:#
 #statistics-results[hidden],#statistics-player-view[hidden],#statistics-team-view[hidden],#statistics-candidate-view[hidden]{display:none}
 #statistics-spotting-alignment[hidden],#statistics-spotting-pages[hidden]{display:none}
 @media(max-width:700px){.statistics-maps{grid-template-columns:1fr}.statistics-table th{width:43%}.statistics-tabs button{flex:1}.statistics-file{flex-wrap:wrap}}
+
+#pass-benchmark[hidden],#benchmark-controls[hidden],#benchmark-review[hidden],#benchmark-pages[hidden]{display:none}
+#pass-benchmark{scroll-margin-top:1rem;margin-top:16px}
+#benchmark-tolerance{max-width:9rem}
+.benchmark-format{overflow:auto;padding:10px;background:#eef4ef;border-radius:8px}
+.benchmark-metric{display:grid;gap:4px;padding:12px;background:#eff5ef;border:1px solid #d4e2d6;border-radius:8px}
+.benchmark-metric strong{font-size:1.3rem}
+.benchmark-moment .row{margin-top:6px}
+#match-actions{margin-top:16px;scroll-margin-top:1rem}
+#match-actions[hidden],#match-actions-pages[hidden],#match-actions-filter-label[hidden]{display:none}

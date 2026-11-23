@@ -31,6 +31,9 @@ def validate_context(context):
     for key in ("start_ms", "end_ms", "pitch_length_m", "pitch_width_m"):
         if key in context and (not finite(context[key]) or context[key] < 0):
             raise ValueError(f"{key} must be a nonnegative finite number")
+    window = context.get("press_outcome_window_ms", 5000)
+    if type(window) is not int or not 1 <= window <= 15000:
+        raise ValueError("Press outcome window must be 1–15000 milliseconds")
     directions = context.get("directions", {})
     if not isinstance(directions, dict):
         raise ValueError("Directions must be keyed by period and team")
@@ -50,7 +53,7 @@ def validate_context(context):
         for field in ("player_id", "team_id"):
             if field in row and (not isinstance(row[field], str) or not row[field]):
                 raise ValueError("Reviewed identity values must be nonempty strings")
-    for key in ("episodes", "event_coverage", "possession_intervals", "ground_ball_intervals", "live_intervals", "period_intervals"):
+    for key in ("episodes", "event_coverage", "possession_intervals", "ground_ball_intervals", "live_intervals", "period_intervals", "dead_ball_intervals"):
         _spans(context.get(key, []), key)
     previous_end = -1
     for interval in sorted(context.get("period_intervals", []), key=lambda r: r["start_ms"]):

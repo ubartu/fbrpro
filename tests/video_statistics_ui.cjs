@@ -47,10 +47,10 @@ const doc=new Node('document');
 Object.assign(doc,{getElementById:find,createElement:tag=>new Node(tag),createElementNS:(_,tag)=>new Node(tag),createDocumentFragment:()=>new Node('#fragment')});
 const raf=[];
 const ctx=vm.createContext({
-  document:doc,requestAnimationFrame:fn=>raf.push(fn),
+  document:doc,URLSearchParams,requestAnimationFrame:fn=>raf.push(fn),
   CustomEvent:class {constructor(type,{detail}){this.type=type;this.detail=detail;}},
 });
-for(const name of ['review.js','analysis.js','statistics.js'])vm.runInContext(fs.readFileSync('video/'+name,'utf8'),ctx,{filename:name});
+for(const name of ['review.js','analysis.js','statistics.js','benchmark.js'])vm.runInContext(fs.readFileSync('video/'+name,'utf8'),ctx,{filename:name});
 const flush=()=>{while(raf.length)raf.shift()();};
 const change=async(id,data,name=id+'.json')=>{
   const el=find(id);
@@ -211,5 +211,72 @@ function allText(el){return String(el.textContent||'')+' '+el.children.map(allTe
   vm.runInContext('clearVideoStatistics()',ctx);
   assert.equal(find('statistics-results').hidden,true);
   assert.equal(find('statistics-export').disabled,true);
+  const result=vm.runInContext(`comparePasses(
+    [{t_ms:100},{t_ms:1050},{t_ms:1120},{t_ms:2800},{t_ms:3000}],
+    {start_ms:1000,end_ms:3000,events:[{type:"pass",t_ms:1100},{type:"pass",t_ms:2000}]},100)`,ctx);
+  assert.equal(result.matched,1);
+  assert.equal(result.missed,1);
+  assert.equal(result.extra,2);
+  assert.equal(result.precision,1/3);
+  assert.equal(result.recall,1/2);
+  assert.throws(()=>vm.runInContext(`readBenchmarkLabels(
+    {start_ms:0,end_ms:1000,events:[],source_sha256:"other"},
+    {duration_ms:1000,source_sha256:"source"})`,ctx),/different video file/);
+  vm.runInContext(`
+    activeVideoFile={name:"own-match.mp4",size:100};
+    localApp=true;fullUploadLimit=1000;video.duration=3;video.readyState=1;
+    document.getElementById("match-actions").scrollIntoView=()=>{};
+    globalThis.setInterval=()=>1;
+    globalThis.clearInterval=()=>{};
+    globalThis.AbortController=class {signal={aborted:false};};
+    video.pause=()=>{};
+    fetch=async(url,options)=>{
+      if(!url.startsWith("/api/track?"))throw Error("Unexpected request "+url);
+      globalThis.passRequest=options;
+      return {ok:true,json:async()=>({...globalThis.passTracking,
+        analysis_scope:"full_video",preview_plan:{...globalThis.passPlan,selected_video_ms:3000},
+        pass_test:{events:[{type:"pass",source:"tracking",t_ms:1250}],ground_truth:globalThis.passReference,ball_actions:globalThis.ballActions,possession:globalThis.possession}})};
+    };
+  `,ctx);
+  ctx.passTracking={...tracking,source_sha256:'exact-video'};
+  ctx.passPlan=plan;
+  assert.equal(find('pass-benchmark').hidden,true);
+  await find('benchmark-analyze').onclick();
+  assert.equal(ctx.passRequest?.headers['X-FBRPRO-Pass-Test'],'1',find('analysis-status').textContent);
+  assert.equal(ctx.passRequest.body.name,'own-match.mp4');
+  assert.equal(find('pass-benchmark').hidden,false);
+  assert.equal(find('benchmark-controls').hidden,false);
+  const labels=find('benchmark-labels');
+  labels.files=[{name:'truth.json',text:async()=>JSON.stringify({start_ms:0,end_ms:3000,
+    source_sha256:'exact-video',events:[{type:'pass',t_ms:1300},{type:'pass',t_ms:2100}]})}];
+  find('benchmark-tolerance').value='480';find('benchmark-tolerance').validity={valid:true};
+  find('benchmark-filter').value='all';
+  await labels.onchange({target:labels});
+  assert.match(allText(find('benchmark-summary')),/Label recall.*50%/);
+  assert.match(allText(find('benchmark-moments')),/Unmatched reference label/);
+  find('benchmark-filter').value='missed';find('benchmark-filter').onchange();
+  assert.doesNotMatch(allText(find('benchmark-moments')),/Matched pass/);
+  ctx.ballActions=[{type:'tackle',label:'Estimated tackle',source:'tracking',track_id:'t1',t_ms:1250}];
+  ctx.possession={scope_ms:3000,observable_ms:1500,states_ms:{player_control:1500,in_transit:0,
+    contested:0,dead_ball:0,unobservable:1500},teams:[],players:[],
+    intervals:[{state:'unobservable',start_ms:1500,end_ms:3000}]};
+  ctx.passReference={filename:'catalog-labels.json',data:{start_ms:0,end_ms:3000,source_sha256:'exact-video',
+    events:[{type:'pass',t_ms:1250}]}};
+  await find('benchmark-analyze').onclick();
+  assert.equal(find('match-actions').hidden,false);
+  assert.match(allText(find('match-actions-summary')),/Observable ball state.*50%/);
+  assert.match(allText(find('match-actions-rows')),/Estimated tackle/);
+  find('match-actions-view').value='possession';find('match-actions-view').onchange();
+  assert.match(allText(find('match-actions-rows')),/Unobservable/);
+  find('match-actions-view').value='reviewed';find('match-actions-view').onchange();
+  assert.match(allText(find('match-actions-rows')),/No reviewed actions saved/);
+  assert.match(find('benchmark-status').textContent,/labels loaded automatically/);
+  assert.match(allText(find('benchmark-summary')),/Label recall.*100%/);
+  assert.equal(find('benchmark-export-comparison').disabled,false);
+  assert.match(find('benchmark-comparison-status').textContent,/catalog-labels.json/);
+  vm.runInContext('activeVideoFile={name:"another.mp4"}',ctx);
+  await publish('video','emptied');
+  assert.equal(find('pass-benchmark').hidden,true);
+  assert.equal(find('match-actions').hidden,true);
   console.log('Video statistics UI passed: explicit post-analysis only, scope/context, evidence gates, maps, team view, candidates, stale responses and session isolation.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -181,6 +181,40 @@ class ReviewServerTests(unittest.TestCase):
         self.assertFalse(captured[0].exists())
         self.assertEqual(self.call("GET", progress_url)[0], 404)
 
+    def test_pass_test_returns_automatic_events_in_full_tracking_response(self):
+        from test_video_events import tracking
+
+        report = tracking()
+        report["clips"] = [{"clip_id": "c", "video_start_ms": 0, "video_end_ms": 3000}]
+        report["source_sha256"] = hashlib.sha256(b"video").hexdigest()
+        project = Path(self.enterContext(TemporaryDirectory()))
+        folder = project / "reports" / "video-pilot" / "footpass" / "ten-clips"
+        folder.mkdir(parents=True)
+        reference = {"source_sha256": report["source_sha256"], "start_ms": 0, "end_ms": 3000,
+                     "events": [{"type": "pass", "t_ms": 1000}]}
+        (folder / "example-labels.json").write_text(json.dumps(reference))
+        (folder / "manifest.json").write_text(json.dumps({"clips": [
+            {"source_sha256": report["source_sha256"], "labels": "example-labels.json"}
+        ]}))
+        with (patch.object(video_ui, "WEB_ROOT", project),
+              patch.object(video_ui, "disk_usage", return_value=SimpleNamespace(free=1 << 32)),
+              patch.object(video_ui, "estimate_duration_ms", return_value=3000),
+              patch.object(video_ui.video_tracking, "run", return_value=report)):
+            status, _, body = self.call("POST", "/api/track?mode=full",
+                                        headers={"X-FBRPRO-Video": "1", "X-FBRPRO-Pass-Test": "1"},
+                                        body=b"video")
+        self.assertEqual(status, 200, body)
+        pass_test = json.loads(body)["pass_test"]
+        self.assertEqual(pass_test["predictions_in_scope"], 0)
+        self.assertTrue(pass_test["events"])
+        self.assertTrue(all(event["source"] == "tracking" for event in pass_test["events"]))
+        self.assertEqual(pass_test["ground_truth"], {"filename": "example-labels.json", "data": reference})
+        self.assertEqual(pass_test["possession"]["scope_ms"], 3000)
+        self.assertIn("ball_actions", pass_test)
+        self.assertEqual(pass_test["reviewed_events"], [])
+        with patch.object(video_ui, "WEB_ROOT", project):
+            self.assertIsNone(video_ui.pass_reference("a" * 64))
+
     def test_calibration_is_reused_only_for_matching_video_or_explicit_upload(self):
         guard = {"X-FBRPRO-Video": "1"}
         demo_bytes = self.server.demo["video"].read_bytes()

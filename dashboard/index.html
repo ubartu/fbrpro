@@ -165,21 +165,54 @@ const scoreText=v=>Number.isFinite(v)?num(v)+"%":"—";
 function contextFor(p,matchOnly){
  return matchOnly?p?.matches.find(m=>m.match_id===by("match").value):p;
 }
+const videoMeasures={
+ deep_central_share:"Own-third central occupancy",advanced_central_share:"Final-third central occupancy",
+ middle_third_share:"Middle-third occupancy",end_thirds_balance:"Balanced use of both end thirds",
+ movement_rate:"Movement per minute (% of pitch length)"
+};
+const videoSeconds=ms=>num((ms||0)/1000)+" s";
+function videoRole(p,key,matchOnly){
+ if(!matchOnly){
+  const summary=p.video_role_summary, role=summary?.roles?.[key];
+  if(!role)return "";
+  return '<small>Video + events · '+num(role.scored_matches)+' / '+num(summary.total_matches)+
+   ' matches scored · '+videoSeconds(role.usable_ms)+' usable · '+num(role.strongest_matches)+' strongest-pattern matches</small>';
+ }
+ const evidence=contextFor(p,true)?.video_role_evidence, role=evidence?.roles?.[key];
+ if(!role)return "";
+ const status=Number.isFinite(role.comparison_pct)?scoreText(role.comparison_pct)+' · '+num(role.peer_count)+' comparable midfielders':
+   esc(role.reason||"Evidence unavailable");
+ const signals=Array.isArray(role.signals)?role.signals.filter(Boolean).map(m=>{
+  const video=m.source==="video", title=videoMeasures[m.metric]||METRICS.find(x=>x[0]===m.metric)?.[1]||m.metric;
+  const value=Number.isFinite(m.value)?(video&&m.metric!=="movement_rate"?scoreText(100*m.value):num(m.value)):"—";
+  const support=video?videoSeconds(m.usable_ms)+' usable':num(m.opportunities||0)+' event opportunities · '+pct(m.coverage)+' field coverage';
+  return '<li>'+esc(title)+' · '+value+'<small>'+support+'</small></li>';
+ }).join(""):"";
+ return '<details><summary>Video + events · '+status+'</summary><small>'+videoSeconds(evidence.usable_ms)+
+  ' mapped during '+videoSeconds(evidence.midfield_position_ms)+' in position</small><ul class="signals">'+signals+'</ul></details>';
+}
 function roleCell(p,k,matchOnly){
  if(!p)return '<td>—</td>';
  const v=contextFor(p,matchOnly)?.role_comparison?.[k];
- if(!v)return '<td><small>This older report has no relative comparisons. Select a built-in dataset.</small></td>';
+ const video=videoRole(p,k,matchOnly);
+ if(!v)return '<td><small>Event comparison unavailable.</small>'+video+'</td>';
  const titleFor=key=>METRICS.find(x=>x[0]===key)?.[1]??key;
  const scored=Number.isFinite(v.comparison_pct);
  const main=scored?'<span class="val">'+scoreText(v.comparison_pct)+'</span><small>Relative to '+num(v.peer_count)+' other midfielders</small>':
   '<span class="pill">Not compared</span><small>'+esc(v.reason??"Evidence unavailable")+'</small>';
  const details=scored&&Array.isArray(v.measures)?v.measures.filter(Boolean).map(m=>'<li><b>'+esc(titleFor(m.metric))+'</b><small>'+num(m.per_100)+' per 100 · '+num(m.count)+' actions / '+num(m.opportunities)+' opportunities</small><small>Higher than '+num(m.higher_than)+' · tied with '+num(m.tied_with)+' · lower than '+num(m.lower_than)+(m.leads?' · leads this measure':'')+'</small></li>').join(""):"";
- return '<td>'+main+(details?'<details><summary>Compare the stats</summary><ul class="signals">'+details+'</ul></details>':'')+'</td>';
+ return '<td>'+main+(details?'<details><summary>Compare the stats</summary><ul class="signals">'+details+'</ul></details>':'')+video+'</td>';
 }
 function labels(p,matchOnly){
  const v=contextFor(p,matchOnly);
  const names=(Array.isArray(v?.relative_labels)?v.relative_labels:[]).map(k=>v.role_comparison?.[k]?.label).filter(Boolean);
- return names.length?names.map(x=>'<span class="pill candidate">'+esc(x)+'</span>').join(" "):'<small>No distinct label from available comparisons</small>';
+ const result=names.length?names.map(x=>'<span class="pill candidate">'+esc(x)+'</span>').join(" "):'<small>No distinct label from available comparisons</small>';
+ const evidence=matchOnly?v?.video_role_evidence:null;
+ const videoNames=videoRoleNames(evidence);
+ return result+(videoNames.length?'<small>Video + events · '+videoNames.map(esc).join(", ")+'</small>':"");
+}
+function videoRoleNames(evidence){
+ return Array.isArray(evidence?.relative_labels)?evidence.relative_labels.map(key=>evidence.roles?.[key]?.label).filter(Boolean):[];
 }
 function timeline(p,q,header){
  const profiles=[p,q];
@@ -190,7 +223,11 @@ function timeline(p,q,header){
   if(!m)return '<td><small>No minutes in this position group</small></td>';
   const details=(Array.isArray(m.relative_labels)?m.relative_labels:[]).map(k=>m.role_comparison?.[k]).filter(Boolean).map(v=>
     '<span class="pill candidate">'+esc(v.label)+' '+scoreText(v.comparison_pct)+'</span>').join(" ");
-  return '<td>'+(details||'<small>No distinct label</small>')+'<small>'+num(m.estimated_minutes)+' min</small></td>';
+  const evidence=m.video_role_evidence;
+  const names=videoRoleNames(evidence);
+  const video=evidence?'<small>Video + events · '+(names.length?names.map(esc).join(', '):'Unassessed')+
+   ' · '+videoSeconds(evidence.usable_ms)+' usable</small>':"";
+  return '<td>'+(details||'<small>No distinct label</small>')+'<small>'+num(m.estimated_minutes)+' min</small>'+video+'</td>';
  };
  return '<section class="panel" id="role-assessment"><h2>Match role timeline</h2><p class="hint">These labels compare players in the same match and position group. Choose a match to see the rates behind its label.</p>'+
  '<div class="timeline"><table class="table">'+header.replace(">Measure<",">Match<")+'<tbody>'+dates.map(id=>'<tr><th scope="row"><button class="match-link" type="button" data-match="'+esc(id)+'">'+esc(matchLabel(id))+'</button></th>'+cell(p,id)+cell(q,id)+'</tr>').join("")+'</tbody></table></div></section>';

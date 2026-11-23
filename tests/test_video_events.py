@@ -42,6 +42,24 @@ class VideoEventsTests(unittest.TestCase):
         self.assertIsNone(shot["track_id"])
         self.assertEqual(report["player_pass_attempts"], {"passer": 1})
 
+    def test_trained_detector_scores_observed_windows_without_label_input(self):
+        from football_normalizer.video_pass_model import PassModel
+
+        model = PassModel((0,)*8, (1,)*8, (0,)*8, 3, .65)
+        result = analyze(tracking(), pass_model=model)
+        self.assertEqual(result["pass_detector"], "trained")
+        event, = result["events"]
+        self.assertEqual((event["type"], event["status"], event["label"]), ("pass", "detected", "Detected pass"))
+        self.assertGreater(event["pass_model_score"], .65)
+        self.assertEqual(event["track_id"], "passer")
+
+    def test_spotting_only_preserves_predictions_without_tracking_attribution(self):
+        report = analyze(tracking(), predictions=predictions(), alignment=ALIGN,
+                         include_tracking=False, attribute_predictions=False)
+        self.assertEqual([row["source"] for row in report["events"]], ["soccernet", "soccernet"])
+        self.assertIsNone(report["events"][0]["track_id"])
+        self.assertEqual(report["events"][0]["outcome"], "unknown")
+
     def test_only_predictions_in_the_selected_half_and_scope_are_imported(self):
         source = tracking()
         report = analyze(source, {"period_intervals": [{"start_ms": 0, "end_ms": 600, "period": 2}], "end_ms": 300},
@@ -88,8 +106,23 @@ class VideoEventsTests(unittest.TestCase):
             passer["inferred_team"] = "kit:team_b"
             ball["bbox_xyxy"] = [x-2, y-2, x+2, y+2]
             frame["objects"].append({**passer, "track_id": "receiver", "bbox_xyxy": [112, 60, 132, 100]})
-        event, = analyze(source)["events"]
+        event, reception = analyze(source)["events"]
+        self.assertEqual(event["outcome"], "complete")
+        self.assertEqual((reception["type"], reception["pass_id"], reception["t_ms"]), ("reception", event["id"], 400))
+        self.assertEqual(event["reception_id"], reception["id"])
         self.assertEqual((event["t_ms"], event["track_id"], event["recipient_candidate_track_id"]), (250, "passer", "receiver"))
+
+    def test_next_opponent_control_is_incomplete_but_cut_is_unknown(self):
+        source = tracking()
+        for frame in source["frames"]:
+            frame["objects"][0]["inferred_team"] = "kit:team_a"
+            frame["objects"].append({**frame["objects"][0], "track_id": "opponent",
+                                     "inferred_team": "kit:team_b", "bbox_xyxy": [200, 20, 260, 100]})
+        event, = analyze(source)["events"]
+        self.assertEqual((event["outcome"], event["next_control_track_id"]), ("incomplete", "opponent"))
+        source["frames"][4]["camera_cut_suspected"] = True
+        event, = analyze(source)["events"]
+        self.assertEqual(event["outcome"], "unknown")
 
     def test_occlusion_cut_and_competing_players_leave_actor_unknown(self):
         for reason in ("occlusion", "camera cut", "overlapping players"):

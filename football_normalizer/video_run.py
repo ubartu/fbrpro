@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
-from . import video, video_inference, video_kits, video_metrics, video_motion, video_pitch, video_pitch_lines, video_roles, video_tracking
+from . import video, video_ball_actions, video_events, video_inference, video_kits, video_metrics, video_motion, video_pitch, video_pitch_lines, video_pressing, video_roles, video_stats_common, video_track_links, video_tracking
 from .export import parquet
 
 
@@ -49,21 +49,21 @@ def run(args):
     identities = read(args.identity_map) if args.identity_map else {}
     options = {"clip_ids": sorted(set(args.clip or [])), "sample_fps": args.sample_fps,
                "confidence": args.confidence, "max_error_m": args.max_error_m}
-    line_model = getattr(args, "pitch_lines_model", None)
-    if line_model is not None:
-        options["pitch_lines_model"] = str(line_model)
+    optional_models = {name: getattr(args, name, None) for name in ("pitch_model", "pitch_lines_model", "ball_model")}
+    options.update({name: str(path) for name, path in optional_models.items() if path is not None})
     cv2, np = video_tracking.vision()
     source, model = file_hash(args.video), file_hash(args.model)
     tracking_inputs = {
         "source_sha256": source, "model_sha256": model, "plan": json_hash(plan),
         "calibration": json_hash(calibration), "reviewed_identities": json_hash(identities),
         "tracker_code": file_hash(Path(video_tracking.__file__)),
+        "track_link_code": file_hash(Path(video_track_links.__file__)),
         "inference_code": file_hash(Path(video_inference.__file__)),
         "camera_motion_code": file_hash(Path(video_motion.__file__)),
         "pitch_code": file_hash(Path(video_pitch.__file__)),
         "kit_code": file_hash(Path(video_kits.__file__)),
         "pitch_lines_code": file_hash(Path(video_pitch_lines.__file__)),
-        "pitch_lines_model": file_hash(line_model) if line_model is not None else None,
+        "optional_model_sha256": {name: file_hash(path) for name, path in optional_models.items() if path is not None},
         "role_inference_code": file_hash(Path(video_roles.__file__)),
         "alignment_code": file_hash(Path(video.__file__)), "opencv": cv2.__version__,
         "numpy": np.__version__, **options,
@@ -105,8 +105,8 @@ def run(args):
                 parquet(staging)
                 (staging / "tracking.parquet").replace(parquet_path)
         result["outputs"]["parquet_tracking"] = str(parquet_path.relative_to(args.output))
-    if args.context:
-        context = read(args.context)
+    context = read(args.context) if args.context else None
+    if context is not None:
         bundle_inputs = {name: file_hash(args.bundle / name) for name in
                          ("status.json", "matches.jsonl", "events.jsonl", "appearances.jsonl")} if args.bundle else {}
         metric_key = json_hash({"tracking": file_hash(report_path), "context": json_hash(context),
@@ -116,6 +116,16 @@ def run(args):
         save(metrics_path, metrics)
         result["outputs"]["metrics"] = str(metrics_path.relative_to(args.output))
         result["metrics_key"] = metric_key
+    if getattr(args, "pass_events", False):
+        event_report = video_events.analyze(tracking, context)
+        event_key = json_hash({"tracking": tracking_key, "context": context,
+                               "code": file_hash(Path(video_events.__file__)),
+                               "ball_actions": file_hash(Path(video_ball_actions.__file__)),
+                               "pressing": file_hash(Path(video_pressing.__file__)),
+                               "preparation": file_hash(Path(video_stats_common.__file__))})
+        event_path = args.output / "events" / event_key / "video-events.json"
+        save(event_path, event_report)
+        result["outputs"]["events"] = str(event_path.relative_to(args.output))
     save(args.output / "run.json", result)
     return result
 
@@ -129,9 +139,12 @@ def main(argv=None):
         parser.add_argument("--" + arg, type=Path)
     parser.add_argument("--clip", action="append", help="Only track this clip ID (repeatable)")
     parser.add_argument("--sample-fps", type=float, default=video_tracking.DEFAULT_SAMPLE_FPS)
-    parser.add_argument("--pitch-lines-model", type=Path, help="SoccerNet pitch line ONNX model for automatic calibration")
+    parser.add_argument("--pitch-model", type=Path, help="Pitch landmark ONNX model")
+    parser.add_argument("--pitch-lines-model", type=Path, help="SoccerNet pitch line ONNX model")
+    parser.add_argument("--ball-model", type=Path, help="Dedicated ball detector ONNX model")
     parser.add_argument("--confidence", type=float, default=.35)
     parser.add_argument("--max-error-m", type=float, default=2)
+    parser.add_argument("--pass-events", action="store_true", help="Export estimated passes and receptions")
     parser.add_argument("--parquet", action="store_true", help="Export nonempty canonical tracking as Parquet")
     args = parser.parse_args(argv)
     if args.bundle and not args.context:

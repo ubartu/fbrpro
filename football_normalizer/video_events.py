@@ -7,6 +7,8 @@ import json
 from math import hypot
 from pathlib import Path
 
+from .video_ball_actions import analyze_ball_actions, closest_contact as _closest_contact
+from .video_ball_actions import redirects_ball as _redirects_ball, same_ball as _same_ball
 from .video_stats_common import finite, prepare
 
 
@@ -14,6 +16,7 @@ VERSION = "fbrpro-video-events-v1"
 PASS_LABELS = {"pass", "high pass", "cross"}
 ATTRIBUTION_WINDOW_MS = 400
 ATTRIBUTION_SEPARATION_MS = 100
+MAX_RECEPTION_MS = 4000
 
 
 def _number(value):
@@ -54,7 +57,7 @@ def align_predictions(document, alignment):
             continue
         label = row["label"].strip()
         t_ms = round(position) - source + target
-        action = label.lower()
+        action = label.lower().replace("-", " ")
         kind = "pass" if action in PASS_LABELS else action.replace(" ", "_")
         key = (t_ms, kind)
         if key not in events or score > events[key]["action_score"]:
@@ -105,13 +108,14 @@ def _observations(tracking, prepared):
                 team_evidence[row["track_id"]].add(team)
     stable_teams = {track: next(iter(teams)) for track, teams in team_evidence.items() if len(teams) == 1}
     identities = prepared["context"].get("identities", {})
-    shot = 0
+    excluded_epoch = 0
+    dead = prepared["context"].get("dead_ball_intervals", [])
     for frame in prepared["frames"]:
         stamp = frame["t_ms"]
         source = raw[stamp]
-        if source.get("camera_cut_suspected"):
-            shot += 1
-        if frame["live"] is False or stamp in duplicate_times:
+        if (frame["live"] is False or stamp in duplicate_times or
+                any(row.get("period", 1) == frame["period"] and row["start_ms"] <= stamp < row["end_ms"] for row in dead)):
+            excluded_epoch += 1
             yield None
             continue
         balls, players, teams = [], {}, {}
@@ -130,7 +134,7 @@ def _observations(tracking, prepared):
                                 or row.get("inferred_team") or stable_teams.get(track))
         if len(balls) == 1:
             ball_id, center = balls[0]
-            yield Sample(stamp, frame["period"], (source.get("clip_id"), source.get("segment_id"), shot), ball_id, center, players, teams)
+            yield Sample(stamp, frame["period"], (frame["segment_id"], source.get("segment_id"), excluded_epoch), ball_id, center, players, teams)
         else:
             yield None
 
@@ -169,28 +173,6 @@ def _release_candidates(samples, gap_ms):
                          "actor_reason": "Ball moved away after two close samples" if margin is None or margin >= .15
                          else "Multiple players were close to the ball before release"})
     return releases
-
-
-def _same_ball(a, b, gap_ms):
-    return (0 < b.t_ms-a.t_ms <= gap_ms and (a.shot, a.period, a.ball_id) == (b.shot, b.period, b.ball_id))
-
-
-def _closest_contact(sample):
-    near = sorted((sample.foot_distance(track), track) for track in sample.players)
-    if near and near[0][0] <= .43 and (len(near) == 1 or near[1][0]-near[0][0] >= .14):
-        return near[0][1]
-
-
-def _redirects_ball(before, contact, after, track):
-    offsets = [sample.ball_offset(track) for sample in (before, contact, after)]
-    if any(offset is None for offset in offsets):
-        return False
-    a, b, c = offsets
-    if hypot(*b) > .22 or min(hypot(*a), hypot(*c))-hypot(*b) < .18:
-        return False
-    incoming = (b[0]-a[0], b[1]-a[1])
-    outgoing = (c[0]-b[0], c[1]-b[1])
-    return sum(u*v for u, v in zip(incoming, outgoing)) <= .5*hypot(*incoming)*hypot(*outgoing)
 
 
 def _transfer_candidates(samples, gap_ms):
@@ -238,6 +220,58 @@ def _transfer_candidates(samples, gap_ms):
     return transfers
 
 
+def _controlled_arrival(samples, index, gap_ms):
+    before, arrival, after = samples[index-1:index+2]
+    if not all((before, arrival, after)) or not (
+            _same_ball(before, arrival, gap_ms) and _same_ball(arrival, after, gap_ms)):
+        return None
+    player = _closest_contact(arrival)
+    if player and _closest_contact(before) != player and (
+            _closest_contact(after) == player or _redirects_ball(before, arrival, after, player)):
+        return player
+
+
+def _pass_outcome(release, samples, index, gap_ms, tracks):
+    start = samples[index]
+    passer = release.get("track_id")
+    result = {"outcome": "unknown", "outcome_reason": "Passer could not be resolved"}
+    if not passer:
+        return result
+    team = start.teams.get(passer)
+    result["outcome_reason"] = "No controlled arrival observed after release"
+    for i in range(index+1, len(samples)-1):
+        arrival = samples[i]
+        previous = samples[i-1]
+        if arrival is None or not _same_ball(previous, arrival, gap_ms):
+            result["outcome_reason"] = "Ball evidence ends at a gap, camera cut or track change"
+            break
+        if arrival.t_ms-start.t_ms > MAX_RECEPTION_MS:
+            break
+        player = _controlled_arrival(samples, i, gap_ms)
+        if not player:
+            continue
+        player_id = tracks[player].get("player_id")
+        passer_id = tracks[passer].get("player_id")
+        if player == passer or (player_id and player_id == passer_id):
+            result["outcome_reason"] = "The ball returned to the same player"
+            break
+        arrival_team = arrival.teams.get(player)
+        after_team = samples[i+1].teams.get(player)
+        if (not team or not arrival_team or team.startswith("kit:") != arrival_team.startswith("kit:")
+                or after_team not in (None, arrival_team)
+                or arrival.teams.get(passer) not in (None, team)):
+            result["outcome_reason"] = "Teams could not be resolved at the first controlled arrival"
+            break
+        completed = arrival_team == team
+        result.update(outcome="complete" if completed else "incomplete",
+                      outcome_reason="Teammate controlled the ball" if completed else "Opponent controlled the ball",
+                      arrival_ms=arrival.t_ms, next_control_track_id=player, next_control_player_id=player_id)
+        if completed:
+            result.update(receiver_track_id=player, receiver_player_id=player_id)
+        break
+    return result
+
+
 def _attribute(prediction, releases, stamps, shot_boundaries, same_period):
     stamp = prediction["t_ms"]
     start = bisect_left(stamps, stamp-ATTRIBUTION_WINDOW_MS)
@@ -268,20 +302,42 @@ def _shot_boundaries(tracking, gap_ms):
     return sorted(boundaries)
 
 
-def analyze(tracking, context=None, predictions=None, alignment=None):
+def analyze(tracking, context=None, predictions=None, alignment=None, *, include_tracking=True, attribute_predictions=True, pass_model=None):
     prepared = prepare(tracking, context)
     rate = tracking.get("sample_fps", 10)
     gap_ms = min(300, max(150, 1600/rate))
     samples = list(_observations(tracking, prepared))
-    releases = _release_candidates(samples, gap_ms)
-    transfers = _transfer_candidates(samples, gap_ms)
-    transfers_by_contact = {(row["period"], row["actor_sample_ms"]): row for row in transfers}
-    for release in releases:
-        transfer = transfers_by_contact.get((release["period"], release["actor_sample_ms"]))
-        if transfer and transfer["track_id"] == release["track_id"]:
-            release.update(transfer)
-    seen_contacts = {(row["period"], row["actor_sample_ms"]) for row in releases}
-    releases.extend(row for row in transfers if (row["period"], row["actor_sample_ms"]) not in seen_contacts)
+    releases = _release_candidates(samples, gap_ms) if pass_model is None else pass_model.releases(samples, gap_ms)
+    if pass_model is None:
+        transfers = _transfer_candidates(samples, gap_ms)
+        transfers_by_contact = {(row["period"], row["actor_sample_ms"]): row for row in transfers}
+        for release in releases:
+            transfer = transfers_by_contact.get((release["period"], release["actor_sample_ms"]))
+            if transfer and transfer["track_id"] == release["track_id"]:
+                release.update(transfer)
+        seen_contacts = {(row["period"], row["actor_sample_ms"]) for row in releases}
+        releases.extend(row for row in transfers if (row["period"], row["actor_sample_ms"]) not in seen_contacts)
+    tracks = {key: dict(meta) for key, meta in prepared["tracks"].items()}
+    conflicting_ids = set()
+    for sample in samples:
+        if sample is None:
+            continue
+        roster_ids = Counter(tracks[key]["player_id"] for key in sample.players if tracks[key]["player_id"])
+        conflicting_ids.update(key for key in sample.players if roster_ids[tracks[key]["player_id"]] > 1)
+    for key in conflicting_ids:
+        tracks[key]["player_id"] = None
+    sample_indices = {sample.t_ms: index for index, sample in enumerate(samples) if sample is not None}
+    claimed_arrivals = set()
+    for release in sorted(releases, key=lambda row: row["actor_sample_ms"], reverse=True):
+        release["passer_player_id"] = tracks.get(release["track_id"], {}).get("player_id")
+        outcome = _pass_outcome(release, samples, sample_indices[release["actor_sample_ms"]], gap_ms, tracks)
+        arrival = (release["period"], outcome.get("arrival_ms"))
+        if arrival[1] is not None:
+            if arrival in claimed_arrivals:
+                outcome = {"outcome": "unknown", "outcome_reason": "A later release already links to this arrival"}
+            else:
+                claimed_arrivals.add(arrival)
+        release.update(outcome)
     releases.sort(key=lambda row: row["t_ms"])
     stamps = [row["t_ms"] for row in releases]
     spans = prepared["scope_spans"]
@@ -302,39 +358,85 @@ def analyze(tracking, context=None, predictions=None, alignment=None):
         if live_at_event is False:
             continue
         attribution = (_attribute(prediction, releases, stamps, cuts, known_periods)
-                       if prediction["type"] == "pass" else {"track_id": None, "actor_reason": "Player attribution is available for passes"})
+                       if prediction["type"] == "pass" and attribute_predictions else
+                       {"track_id": None, "actor_reason": "No tracking attribution requested for this action"})
         events.append({**prediction, **attribution, "status": "predicted"})
 
     by_release = defaultdict(list)
     for event in events:
-        if event["track_id"]:
-            by_release[event["release_ms"]].append(event)
-    for release_ms, matches in by_release.items():
+        if "release_ms" in event:
+            by_release[(event["period"], event["release_ms"])].append(event)
+    for (_, release_ms), matches in by_release.items():
         best = min(matches, key=lambda row: (abs(row["t_ms"]-release_ms), -row["action_score"]))
         for event in matches:
             if event is best:
                 continue
             event.update(track_id=None, actor_reason="This release already supports a closer prediction")
-            for key in ("release_ms", "actor_sample_ms", "evidence_start_ms", "evidence_end_ms", "recipient_candidate_track_id"):
-                event.pop(key, None)
+            for key in set(event) - {"source", "label", "type", "source_ms", "t_ms", "period",
+                                     "action_score", "status", "track_id", "actor_reason"}:
+                del event[key]
 
     matched_predictions = len(events)
     attributed_releases = {row["release_ms"] for row in events if "release_ms" in row}
-    for release in releases:
+    for release in releases if include_tracking else ():
         if release["t_ms"] in attributed_releases:
             continue
         label = "Possible pass between teammates" if release.get("recipient_candidate_track_id") else "Possible pass release"
-        events.append({**release, "type": "pass", "label": label, "source": "tracking", "status": "candidate"})
+        detected = "pass_model_score" in release
+        events.append({**release, "type": "pass", "label": "Detected pass" if detected else label,
+                       "source": "tracking", "status": "detected" if detected else "candidate"})
 
-    events.sort(key=lambda row: row["t_ms"])
+    receptions = []
     for row in events:
         row["id"] = f"{row['source']}:{row['period']}:{row['t_ms']}:{row['type']}"
-    counts = Counter(row["track_id"] for row in events if row["type"] == "pass" and row["status"] == "predicted" and row["track_id"])
+        if row["type"] != "pass":
+            continue
+        row.setdefault("outcome", "unknown")
+        row.setdefault("outcome_reason", "No attributed release to follow")
+        if row["outcome"] == "complete":
+            reception_id = f"{row['id']}:reception"
+            row["reception_id"] = reception_id
+            receptions.append({"id": reception_id, "type": "reception", "label": "Estimated reception",
+                               "source": "tracking", "status": "estimated", "period": row["period"],
+                               "t_ms": row["arrival_ms"], "track_id": row["receiver_track_id"],
+                               "player_id": row["receiver_player_id"], "pass_id": row["id"],
+                               "actor_reason": row["outcome_reason"]})
+    passes = [row for row in events if row["type"] == "pass"]
+    counts = Counter(row["track_id"] for row in passes if row["status"] == "predicted" and row["track_id"])
+    if include_tracking:
+        spotting = [row if known_periods else {**row, "period": 1}
+                    for row in events if row["source"] == "soccernet"]
+        ball_actions, possession = analyze_ball_actions(samples, gap_ms, prepared, tracks, releases, spotting)
+    else:
+        ball_actions, possession = [], None
+    reviewed_events = [row for row in prepared["context"].get("events", []) if row.get("reviewed") is True and
+                       any(span["period"] == row.get("period", 1) and span["start_ms"] <= row["t_ms"] < span["end_ms"]
+                           for span in spans)]
+    outcomes = Counter(row["outcome"] for row in passes)
+    per_track = defaultdict(Counter)
+    for row in passes:
+        if row["track_id"]:
+            per_track[row["track_id"]][row["outcome"]] += 1
+        if row.get("receiver_track_id"):
+            per_track[row["receiver_track_id"]]["receptions"] += 1
     return {"version": VERSION, **{key: tracking.get(key) for key in ("match_id", "video_id", "plan_id", "source_sha256")},
+            "ball_actions": ball_actions, "possession": possession, "reviewed_events": reviewed_events,
+            "pass_detector": "trained" if pass_model is not None else "rules",
             "prediction_game": predictions.get("UrlLocal") if predictions is not None else None,
             "alignment": alignment, "scope_spans": spans, "predictions_in_scope": matched_predictions,
-            "predictions_outside_scope": len(spotted)-matched_predictions, "events": events,
-            "player_pass_attempts": dict(counts)}
+            "predictions_outside_scope": len(spotted)-matched_predictions, "events": sorted(events + receptions, key=lambda row: row["t_ms"]),
+            "player_pass_attempts": dict(counts), "pass_outcomes": _outcome_summary(outcomes),
+            "track_pass_outcomes": {track: {**_outcome_summary(values), "receptions": values["receptions"]}
+                                    for track, values in per_track.items()}}
+
+
+def _outcome_summary(outcomes):
+    complete, incomplete, unknown = (outcomes[key] for key in ("complete", "incomplete", "unknown"))
+    resolved = complete + incomplete
+    total = resolved + unknown
+    return {"complete": complete, "incomplete": incomplete, "unknown": unknown,
+            "completion_rate": complete/resolved if resolved else None,
+            "outcome_coverage": resolved/total if total else None}
 
 
 def main(argv=None):

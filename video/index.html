@@ -28,6 +28,7 @@
       <button id="demo-load" type="button" hidden>Load real match demo</button>
       <button id="analyze-video" class="secondary" type="button" hidden disabled>Track the next 8 seconds</button>
       <button id="analyze-full" type="button" hidden disabled>Track full video</button>
+      <button id="benchmark-analyze" class="secondary" type="button" hidden disabled>Analyze match actions</button>
       <button id="cancel-analysis" class="secondary" type="button" hidden disabled>Stop tracking</button>
       <button id="export-preview" class="secondary" type="button" hidden>Save tracking report</button>
     </div>
@@ -102,6 +103,56 @@
       </details>
     </section>
   </div>
+  <section class="panel statistics-panel" id="match-actions" aria-labelledby="match-actions-title" hidden>
+    <div class="panel-head">
+      <h2 id="match-actions-title">Match actions and possession</h2>
+      <button id="match-actions-export" type="button" class="secondary">Export action report</button>
+    </div>
+    <div id="match-actions-summary" class="metric-grid"></div>
+    <details class="align">
+      <summary>Player control and team possession</summary>
+      <p class="hint">Team possession shares use time with a known team in control. Player control can include tracks with no assigned team.</p>
+      <div id="match-actions-control"></div>
+    </details>
+    <div class="row statistics-actions">
+      <label>Timeline<select id="match-actions-view">
+        <option value="automatic">Automatic actions</option><option value="reviewed">Reviewed actions</option>
+        <option value="possession">Possession intervals</option>
+      </select></label>
+      <label id="match-actions-filter-label">Action<select id="match-actions-filter"><option value="">All actions</option>
+        <option value="pass">Passes</option><option value="reception">Receptions</option><option value="touch">Touches</option>
+        <option value="shot">Shots</option><option value="tackle">Tackles</option><option value="interception">Interceptions</option><option value="press">Presses</option>
+      </select></label>
+      <a href="#pass-benchmark">Pass accuracy test</a>
+    </div>
+    <div id="match-actions-rows"></div>
+    <div id="match-actions-pages" class="row" hidden><button id="match-actions-prev" type="button" class="secondary">Previous</button>
+      <span id="match-actions-page"></span><button id="match-actions-next" type="button" class="secondary">Next</button></div>
+  </section>
+  <section class="panel statistics-panel" id="pass-benchmark" aria-labelledby="benchmark-title" hidden>
+    <div class="panel-head"><h2 id="benchmark-title">Pass accuracy test</h2><span id="benchmark-video" class="chip"></span></div>
+    <p id="benchmark-status" class="status" role="status"></p>
+    <div id="benchmark-controls" hidden>
+      <div class="row statistics-actions">
+        <button id="benchmark-export-results" class="secondary" type="button">Save FBRPRO results</button>
+        <label class="statistics-file">Open ground-truth labels<input id="benchmark-labels" type="file" accept=".json,application/json"></label>
+        <label>Timing tolerance (ms)<input id="benchmark-tolerance" type="number" min="0" max="5000" step="1" value="480"></label>
+        <button id="benchmark-export-comparison" class="secondary" type="button" disabled>Save comparison</button>
+      </div>
+      <details class="align">
+        <summary>Ground-truth file format</summary>
+        <p class="hint">Use video timestamps in milliseconds from the start of this exact file. Include every pass release in the labeled interval, even if the pass failed. Use an empty events list if there were no passes. Add passer_player_id, receiver_player_id and outcome when the reference includes them.</p>
+        <pre class="benchmark-format">{"start_ms": 0, "end_ms": 60000, "events": [{"type": "pass", "t_ms": 12500}]}</pre>
+      </details>
+      <div id="benchmark-summary" class="metric-grid" aria-live="polite"></div>
+      <p id="benchmark-comparison-status" class="status" role="status"></p>
+      <div id="benchmark-review" hidden>
+        <label>Show moments<select id="benchmark-filter"><option value="all">All moments</option><option value="missed">Unmatched reference labels</option><option value="extra">Unmatched detections</option><option value="matched">Matched passes</option></select></label>
+        <div id="benchmark-moments"></div>
+        <div class="row" id="benchmark-pages" hidden><button id="benchmark-prev" class="secondary" type="button">Previous</button><span id="benchmark-page"></span><button id="benchmark-next" class="secondary" type="button">Next</button></div>
+      </div>
+    </div>
+  </section>
   <section class="panel evidence-panel" aria-labelledby="evidence-title">
     <div class="panel-head"><div><span class="eyebrow">03 / MOVEMENT EVIDENCE</span><h2 id="evidence-title">What the tracking shows</h2></div><span id="evidence-scope" class="chip">No report loaded</span></div>
     <div id="tracking-coverage" class="metric-grid" role="group" aria-label="Tracking coverage" hidden></div>
@@ -187,8 +238,8 @@
       <div id="statistics-team-view" hidden><div class="metric-picker"><label>Observed team<select id="statistics-team"></select></label></div><p class="hint">These describe visible tracked teammates. They are not a complete formation when players are off camera.</p><div id="statistics-team-metrics" class="statistics-sections"></div></div>
       <div id="statistics-candidate-view" hidden>
         <details class="align" open>
-          <summary>Automatic pass analysis</summary>
-          <p class="hint">Find possible releases from tracked players and the ball. Add a SoccerNet predictions file to spot actions and estimate pass attempts by player.</p>
+          <summary>Automatic match actions</summary>
+          <p class="hint">Estimate ball actions from the current tracks. Add a SoccerNet predictions file to compare spotting evidence.</p>
           <label>SoccerNet predictions JSON<input id="statistics-spotting-file" type="file" accept="application/json,.json"></label>
           <div id="statistics-spotting-alignment" class="grid" hidden>
             <label>Half in prediction file<select id="statistics-spotting-half"><option value="1">First half</option><option value="2">Second half</option></select></label>
@@ -251,5 +302,6 @@
 <script src="review.js"></script>
 <script src="analysis.js"></script>
 <script src="statistics.js"></script>
+<script src="benchmark.js"></script>
 </body>
 </html>

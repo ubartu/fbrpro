@@ -146,6 +146,16 @@ function collectStatisticsContext(){
       context.period_intervals=[...(start>0?[{start_ms:0,end_ms:start,period:1}]:[]),{start_ms:start,end_ms:end,period:2}];
     }
   }
+  if(!getMismatch(tracking,clipPlan)){
+    const roster=clipPlan?.identity_roster||clipPlan?.players||[];
+    for(const [track,identity] of reviewedIdentities){
+      const player=roster.find(row=>row.id===identity.player_id);
+      if(!player)continue;
+      const team=player.team_id||identity.team_id;
+      context.identities ||= {};
+      context.identities[track]={...identity,...(team?{team_id:team}:{})};
+    }
+  }
   for(const key of ["match_id","video_id","plan_id","source_sha256"]){
     if(context[key]&&tracking?.[key]&&context[key]!==tracking[key])throw Error("The context file belongs to different footage or tracking.");
     if(!context[key]&&tracking?.[key])context[key]=tracking[key];
@@ -267,8 +277,13 @@ function renderStatisticsPlayer(){
   }
   const reviewed=Object.fromEntries(Object.entries(p.events||{}).filter(([,metric])=>finite(metric?.value)||metric?.confirmed_count>0));
   const auto=automaticEvents?.player_pass_attempts?.[p.id];
-  if(auto&&matchingStatisticsTracking()&&JSON.stringify(automaticEvents.scope_spans)===JSON.stringify(videoStatistics.scope_spans))
-    statisticsSection($("statistics-player-metrics"),"Automatic pass estimates",{pass_attempts:auto},false);
+  const estimates=automaticEvents?.track_pass_outcomes?.[p.id];
+  if((auto||estimates)&&matchingStatisticsTracking()&&JSON.stringify(automaticEvents.scope_spans)===JSON.stringify(videoStatistics.scope_spans)){
+    const data={...(auto?{pass_attempts:auto}:{})};
+    if(estimates)Object.assign(data,{complete:estimates.complete,incomplete:estimates.incomplete,
+      unknown:estimates.unknown,receptions:estimates.receptions});
+    statisticsSection($("statistics-player-metrics"),"Automatic pass estimates",data,false);
+  }
   if(Object.keys(reviewed).length)statisticsSection($("statistics-player-metrics"),"Reviewed match actions",reviewed,false);
   else $("statistics-player-metrics").append(node("p","hint","Review footage and save actions in Actions to review to build this player’s event record."));
 }
@@ -294,7 +309,8 @@ function statisticsPlayerName(p){
 }
 function renderAutomaticEvents(){
   const current=matchingStatisticsTracking()?automaticEvents:undefined;
-  const target=$("statistics-spotting-events"),rows=current?.events||[],pageSize=30;
+  const target=$("statistics-spotting-events"),pageSize=30;
+  const rows=current?[...current.events,...(current.ball_actions||[])].sort((a,b)=>a.t_ms-b.t_ms):[];
   target.replaceChildren();
   $("statistics-spotting-export").disabled=!current;
   $("statistics-spotting-pages").hidden=rows.length<=pageSize;
@@ -304,11 +320,12 @@ function renderAutomaticEvents(){
   const names=new Map((videoStatistics?.players||[]).map(p=>[p.id,statisticsPlayerName(p)]));
   for(const event of rows.slice(automaticEventPage*pageSize,(automaticEventPage+1)*pageSize)){
     const item=node("article","statistics-candidate");
-    const actor=event.track_id&&(names.get(event.track_id)||statisticsPlayerName({track_id:event.track_id}));
-    const receiver=event.recipient_candidate_track_id;
-    const receiverName=receiver&&(names.get(receiver)||statisticsPlayerName({track_id:receiver}));
+    const actor=event.passer_player_id||event.player_id||(event.track_id&&(names.get(event.track_id)||statisticsPlayerName({track_id:event.track_id})));
+    const receiver=event.receiver_track_id||event.recipient_candidate_track_id;
+    const receiverName=event.receiver_player_id||(receiver&&(names.get(receiver)||statisticsPlayerName({track_id:receiver})));
     item.append(node("p",null,clock(event.t_ms)+" · "+event.label+" · "+(actor||"Player unknown")+(receiverName?" → "+receiverName:"")));
-    item.append(node("small","hint",(event.source==="soccernet"?"SoccerNet score "+fmt(event.action_score*100)+"%":"Tracking candidate")+" · "+event.actor_reason));
+    item.append(node("small","hint",(event.source==="soccernet"?"SoccerNet score "+fmt(event.action_score*100)+"%":event.status==="detected"?"Pass model score "+fmt(event.pass_model_score*100)+"%":event.status==="estimated"?"Tracking estimate":"Tracking candidate")+" · "+event.actor_reason));
+    if(event.outcome)item.append(node("p","hint","Outcome: "+event.outcome+" · "+event.outcome_reason));
     const button=node("button","secondary","Review in footage");button.type="button";
     button.onclick=()=>{video.pause?.();seek(event.t_ms);};item.append(button);
     target.append(item);
@@ -344,8 +361,10 @@ $("statistics-spotting-run").onclick=async()=>{
     automaticEvents=result;automaticEventPage=0;renderAutomaticEvents();renderStatisticsPlayer();
     const attempts=result.events.filter(e=>e.type==="pass"&&e.status==="predicted");
     const candidates=result.events.filter(e=>e.status==="candidate").length;
+    const detected=result.events.filter(e=>e.status==="detected").length;
+    const count=result.pass_detector==="trained"?detected+" detected passes":candidates+" tracking candidates";
     const summary=file?result.predictions_in_scope+" imported actions · "+attempts.filter(e=>e.track_id).length+" of "+attempts.length+" predicted passes attributed · ":"";
-    status("statistics-spotting-status",summary+candidates+" tracking candidates"+(file&&result.predictions_outside_scope?" · "+result.predictions_outside_scope+" outside usable scope":"")+".");
+    status("statistics-spotting-status",summary+count+(file&&result.predictions_outside_scope?" · "+result.predictions_outside_scope+" outside usable scope":"")+".");
   }catch(error){if(request===automaticEventRequest)status("statistics-spotting-status",error.message,true);}
   finally{if(request===automaticEventRequest)$("statistics-spotting-run").disabled=false;}
 };
@@ -398,6 +417,7 @@ function renderRecordedActions(){
     item.append(remove);target.append(item);
   }
   if(events.length>100)target.append(node("p","hint","Showing the latest 100 saved actions. Export context for the full list."));
+  if(typeof renderMatchActions==="function")renderMatchActions();
 }
 const statisticsActionOutcomes={pass:["complete","incomplete"],reception:[],touch:[],tackle:["won","lost"],interception:[],shot:[],press:["successful","unsuccessful"]};
 function showStatisticsActionOutcomes(){

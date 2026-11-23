@@ -17,6 +17,7 @@ from uuid import UUID, uuid4
 
 from . import video, video_tracking
 from .video_events import analyze as analyze_events
+from .video_pass_model import PassModel
 from .video_inference import BACKENDS
 from .video_geometry import reviewed_report
 from .video_statistics import analyze as analyze_statistics
@@ -30,6 +31,7 @@ STATIC = {
     "/video/review.js": "video/review.js",
     "/video/analysis.js": "video/analysis.js",
     "/video/statistics.js": "video/statistics.js",
+    "/video/benchmark.js": "video/benchmark.js",
     "/dashboard/": "dashboard/index.html",
     "/dashboard/index.html": "dashboard/index.html",
 }
@@ -42,6 +44,35 @@ CHUNK_SIZE = 1024 * 1024
 MAX_CALIBRATION_HEADER = 16000
 EMPTY_CALIBRATION = {"coordinate_length_m": 105, "coordinate_width_m": 68,
                      "dimensions_assumed": True, "segments": []}
+
+
+def pass_reference(source_sha256):
+    """Look up a local reference by video content, never by upload filename."""
+    if not isinstance(source_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", source_sha256):
+        return None
+    folder = WEB_ROOT / "reports" / "video-pilot" / "footpass"
+    catalog = folder / "ten-clips" / "manifest.json"
+    paths = [folder / "game_18-pass-reference.json"]
+    try:
+        entries = json.loads(catalog.read_text())["clips"]
+        for row in entries:
+            if not isinstance(row, dict) or row.get("source_sha256") != source_sha256:
+                continue
+            name = row.get("labels")
+            if isinstance(name, str) and re.fullmatch(r"[a-zA-Z0-9_-]+-labels\.json", name):
+                paths.insert(0, catalog.parent / name)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    for path in paths:
+        try:
+            if path.stat().st_size > 20 * 1024 * 1024:
+                continue
+            data = json.loads(path.read_text())
+            if isinstance(data, dict) and data.get("source_sha256") == source_sha256:
+                return {"filename": path.name, "data": data}
+        except (OSError, ValueError):
+            continue
+    return None
 
 
 def preview_plan(start, end, scope="video_preview"):
@@ -134,9 +165,10 @@ class FullVideoJob:
 class ReviewServer(ThreadingHTTPServer):
     def __init__(self, port, model, demo=None, demo_calibration=None, pitch_model=None, *,
                  inference_backend="auto", ball_model=None, sample_fps=video_tracking.DEFAULT_SAMPLE_FPS,
-                 pitch_lines_model=None):
+                 pitch_lines_model=None, pass_model=None):
         super().__init__(("127.0.0.1", port), ReviewHandler)
         self.model = model
+        self.pass_model = pass_model
         self.pitch_model = pitch_model
         self.pitch_lines_model = pitch_lines_model
         self.ball_model = ball_model
@@ -321,7 +353,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     raise ValueError("Choose a tracking report and statistics context")
                 source, context = payload.get("tracking"), payload.get("context", {})
                 if target.path == "/api/video-events":
-                    result = analyze_events(source, context, payload.get("predictions"), payload.get("alignment"))
+                    result = analyze_events(source, context, payload.get("predictions"), payload.get("alignment"),
+                                            pass_model=getattr(self.server, "pass_model", None))
                 else:
                     result = analyze_statistics(source, context)
                 self.send_json(HTTPStatus.OK, result)
@@ -443,6 +476,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
                     full.stage = "preparing_result"
                 report["preview_plan"] = plan
                 report["analysis_scope"] = scope
+                if full and self.headers.get("X-FBRPRO-Pass-Test") == "1":
+                    full.stage = "analyzing_passes"
+                    report["pass_test"] = analyze_events(report, pass_model=getattr(self.server, "pass_model", None))
+                    reference = pass_reference(report.get("source_sha256"))
+                    if reference is not None:
+                        report["pass_test"]["ground_truth"] = reference
+                    full.stage = "preparing_result"
                 if full:
                     self.full_report(directory, report, full)
                 else:
@@ -478,6 +518,7 @@ def main(argv=None):
     parser.add_argument("--demo-tracking", type=Path)
     parser.add_argument("--demo-plan", type=Path)
     parser.add_argument("--demo-calibration", type=Path, help="Calibration for the exact demo video")
+    parser.add_argument("--pass-model", type=Path, help="Trained pass model JSON")
     args = parser.parse_args(argv)
     sibling_model = args.model.with_name("football-pitch-detection.onnx")
     if args.pitch_model is None and sibling_model.is_file():
@@ -508,14 +549,15 @@ def main(argv=None):
         calibration = json.loads(args.demo_calibration.read_text()) if args.demo_calibration else None
         if args.demo_calibration:
             video_tracking.calibration_from(calibration, 2)
+        pass_model = PassModel.from_json(json.loads(args.pass_model.read_text())) if args.pass_model else None
         with ReviewServer(args.port, args.model, demo, calibration, args.pitch_model,
                           inference_backend=args.inference_backend, ball_model=args.ball_model,
-                          sample_fps=args.sample_fps, pitch_lines_model=args.pitch_lines_model) as server:
+                          sample_fps=args.sample_fps, pitch_lines_model=args.pitch_lines_model, pass_model=pass_model) as server:
             print(f"Open http://127.0.0.1:{server.server_port}/video/", flush=True)
             server.serve_forever()
     except KeyboardInterrupt:
         pass
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         parser.exit(2, f"video workbench: {exc}\n")
 
 

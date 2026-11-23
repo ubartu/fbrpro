@@ -296,7 +296,7 @@ $("identity-save").onclick=()=>{
   if(player_id)reviewedIdentities.set(track,{player_id});
   else reviewedIdentities.delete(track);
   $("identity-export").disabled=false;
-  status("identity-status",reviewedIdentities.size+" assignments ready to export. Rerun tracking with the exported map to apply them.");
+  status("identity-status",reviewedIdentities.size+" assignments saved. Recalculate video statistics or actions to apply them.");
 };
 $("identity-export").onclick=()=>download("video-identities.json",Object.fromEntries(reviewedIdentities));
 function phaseName(value){
@@ -685,6 +685,8 @@ function updateAnalysisControls(){
   analysisButton.disabled=busy||!ready;
   fullButton.hidden=!localApp||!positive(fullUploadLimit);
   fullButton.disabled=busy||!ready;
+  $("benchmark-analyze").hidden=fullButton.hidden;
+  $("benchmark-analyze").disabled=fullButton.disabled;
   demoButton.hidden=!sampleAvailable;
   demoButton.disabled=busy;
   cancelButton.hidden=!analysisJob;
@@ -711,7 +713,8 @@ function jobUrl(action,job){
 function showAnalysisProgress(job,signal){
   const display=$("analysis-progress"), started=Date.now();
   let polling=false, phase="";
-  const stages={uploading:"Receiving video",preparing_result:"Preparing the tracking report",cancelling:"Stopping tracking"};
+  const stages={uploading:"Receiving video",preparing_result:"Preparing the tracking report",
+    analyzing_passes:"Analyzing match actions",cancelling:"Stopping tracking"};
   display.hidden=false;
   function render(){
     display.textContent=[phase,"Elapsed "+clock(Date.now()-started).slice(0,-2)].filter(Boolean).join(" · ");
@@ -889,7 +892,7 @@ async function trackingHeaders(){
   if(encoded.length>calibrationLimit)throw Error("This calibration file is too large for browser tracking.");
   return {...trackHeaders,"X-FBRPRO-Calibration":encoded};
 }
-function trackFromPage(full){
+function trackFromPage(full,onPassResult){
   return runFromPage(async (signal,job)=>{
     const file=activeVideoFile;
     if(!file||!Number.isFinite(video.duration))return;
@@ -907,17 +910,24 @@ function trackFromPage(full){
     video.pause();
     analysisStatus(full?"Tracking the full video from the start. Keep this page open while the local app works.":
       "Tracking people in "+clock(start)+"–"+clock(end)+". This can take a moment.");
-    const headers=await trackingHeaders();
+    const headers={...await trackingHeaders()};
+    if(onPassResult)headers["X-FBRPRO-Pass-Test"]="1";
     const report=await api("/api/track?"+query,{method:"POST",signal,headers,body:file})
       .then(r=>r.json());
     if(signal.aborted||activeVideoFile!==file)return;
     if(full&&report.analysis_scope!=="full_video")
       throw Error("The local app returned a short tracking report. Refresh the app and try again.");
+    const passResult=report.pass_test;
+    delete report.pass_test;
     previewReports(report.preview_plan,report,full?"Full video tracking":"New tracking preview");
     previewFile=file;
     exportedPreview=report;
     seek(mappedFrame?.video_time_ms??report.frames[0]?.video_time_ms??start);
     showTrackingResult(report,full);
+    if(onPassResult){
+      if(!Array.isArray(passResult?.events))throw Error("The local app did not return pass results. Restart it and try again.");
+      onPassResult(report,file,passResult);
+    }
   },full);
 }
 analysisButton.onclick=()=>trackFromPage(false);
